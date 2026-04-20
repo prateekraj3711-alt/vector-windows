@@ -52,6 +52,10 @@ function mapLeaf(node: PaneNode, id: string, fn: (leaf: PaneLeaf) => PaneLeaf): 
   if (node.kind === "leaf") return node.id === id ? fn(node) : node;
   return { ...node, children: [mapLeaf(node.children[0], id, fn), mapLeaf(node.children[1], id, fn)] };
 }
+function mapAllLeaves(node: PaneNode, fn: (leaf: PaneLeaf) => PaneLeaf): PaneNode {
+  if (node.kind === "leaf") return fn(node);
+  return { ...node, children: [mapAllLeaves(node.children[0], fn), mapAllLeaves(node.children[1], fn)] };
+}
 function splitLeaf(root: PaneNode, leafId: string, direction: "row" | "column", newAgentId: string): { root: PaneNode; newLeafId: string } {
   let newLeafId = "";
   const walk = (node: PaneNode): PaneNode => {
@@ -423,11 +427,17 @@ export default function App() {
       // conversation for its project (claude --continue).
       const saved = loadSavedTabs();
       if (saved.length > 0) {
-        const restored: Tab[] = saved.map((t) => ({
-          ...t,
-          epoch: (t.epoch ?? 0) + 1,
-          continueLatest: t.resumeId ? t.continueLatest : true,
-        }));
+        const restored: Tab[] = saved.map((raw) => {
+          const t = migrateTab(raw);
+          return {
+            ...t,
+            root: mapAllLeaves(t.root, (leaf) => ({
+              ...leaf,
+              epoch: (leaf.epoch ?? 0) + 1,
+              continueLatest: leaf.resumeId ? leaf.continueLatest : true,
+            })),
+          };
+        });
         setTabs(restored);
         setActiveId(restored[0].id);
         setPicker({ open: false });
