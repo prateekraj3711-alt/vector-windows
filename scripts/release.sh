@@ -2,9 +2,15 @@
 # Release helper: builds Vector, signs the updater bundle, uploads the DMG +
 # .app.tar.gz + .sig + latest.json to a GitHub release.
 #
+# Release notes come from the GitHub release body. If the release does not
+# exist yet, one is created with notes auto-generated from commits since the
+# previous tag. The latest.json manifest embeds those notes so the in-app
+# updater can show "What's new".
+#
 # Requirements:
 #   - gh CLI authenticated
-#   - ~/.config/vector-updater/private.key exists (Tauri updater private key)
+#   - jq installed
+#   - ~/.config/vector-updater/private.ke exists (Tauri updater private key)
 #   - Run from the repo root
 #
 # Usage: scripts/release.sh
@@ -13,11 +19,12 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(node -p "require('./package.json').version")
 TAG="v${VERSION}"
-KEY_PATH="${HOME}/.config/vector-updater/private.key"
+KEY_PATH="${HOME}/.config/vector-updater/private.ke"
 if [ ! -f "$KEY_PATH" ]; then
   echo "Missing ${KEY_PATH} — generate one with: npx tauri signer generate -w ${KEY_PATH}"
   exit 1
 fi
+command -v jq >/dev/null || { echo "jq is required (brew install jq)"; exit 1; }
 
 echo "==> Building Vector ${VERSION}"
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
@@ -31,40 +38,45 @@ for f in "$DMG" "$TARBALL" "$SIG"; do
   [ -f "$f" ] || { echo "missing artifact: $f"; exit 1; }
 done
 
-# Rename tarball to versioned asset for a stable URL.
 V_TARBALL="src-tauri/target/release/bundle/macos/Vector_${VERSION}_aarch64.app.tar.gz"
 V_SIG="${V_TARBALL}.sig"
 cp "$TARBALL" "$V_TARBALL"
 cp "$SIG" "$V_SIG"
 
-MANIFEST="src-tauri/target/release/bundle/macos/latest.json"
+# Create the release first (without assets) if it doesn't exist, so we have a
+# body we can read back for the manifest.
+if ! gh release view "$TAG" >/dev/null 2>&1; then
+  PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}\$" | head -1 || true)
+  if [ -n "${PREV_TAG:-}" ]; then
+    CHANGES=$(git log --pretty=format:'- %s' "${PREV_TAG}..HEAD" | grep -v -E '^- (chore|release):' || true)
+    [ -n "$CHANGES" ] || CHANGES="Maintenance release."
+  else
+    CHANGES="Initial release."
+  fi
+  echo "==> Creating release ${TAG}"
+  gh release create "$TAG" \
+    --title "Vector ${VERSION} (Apple Silicon)" \
+    --notes "$CHANGES"
+fi
+
+RELEASE_NOTES=$(gh release view "$TAG" --json body -q .body)
 SIG_CONTENT=$(cat "$V_SIG")
 PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+MANIFEST="src-tauri/target/release/bundle/macos/latest.json"
+URL="https://github.com/avram19/vector/releases/download/${TAG}/Vector_${VERSION}_aarch64.app.tar.gz"
 
-cat > "$MANIFEST" <<EOF
-{
-  "version": "${VERSION}",
-  "notes": "See https://github.com/avram19/vector/releases/tag/${TAG}",
-  "pub_date": "${PUB_DATE}",
-  "platforms": {
-    "darwin-aarch64": {
-      "signature": "${SIG_CONTENT}",
-      "url": "https://github.com/avram19/vector/releases/download/${TAG}/Vector_${VERSION}_aarch64.app.tar.gz"
-    }
-  }
-}
-EOF
+jq -n \
+  --arg version "$VERSION" \
+  --arg notes "$RELEASE_NOTES" \
+  --arg pub_date "$PUB_DATE" \
+  --arg sig "$SIG_CONTENT" \
+  --arg url "$URL" \
+  '{version:$version, notes:$notes, pub_date:$pub_date, platforms:{"darwin-aarch64":{signature:$sig, url:$url}}}' \
+  > "$MANIFEST"
 
 echo "==> Manifest:"; cat "$MANIFEST"
 
-if gh release view "$TAG" >/dev/null 2>&1; then
-  echo "==> Uploading assets to existing release ${TAG}"
-  gh release upload "$TAG" "$DMG" "$V_TARBALL" "$V_SIG" "$MANIFEST" --clobber
-else
-  echo "==> Creating release ${TAG}"
-  gh release create "$TAG" "$DMG" "$V_TARBALL" "$V_SIG" "$MANIFEST" \
-    --title "Vector ${VERSION} (Apple Silicon)" \
-    --notes "Auto-generated release for ${TAG}. Update via the in-app banner or download the DMG."
-fi
+echo "==> Uploading assets to ${TAG}"
+gh release upload "$TAG" "$DMG" "$V_TARBALL" "$V_SIG" "$MANIFEST" --clobber
 
 echo "==> Done. https://github.com/avram19/vector/releases/tag/${TAG}"

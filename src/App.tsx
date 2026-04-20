@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -16,7 +17,141 @@ import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
 
 type AgentMeta = { id: string; label: string; available: boolean };
-type Tab = { id: string; agentId: string; cwd: string; resumeId?: string; epoch: number };
+
+type PaneLeaf = {
+  kind: "leaf";
+  id: string;
+  agentId: string;
+  cwd: string;
+  resumeId?: string;
+  continueLatest?: boolean;
+  epoch: number;
+};
+type PaneSplit = {
+  kind: "split";
+  id: string;
+  direction: "row" | "column";
+  children: [PaneNode, PaneNode];
+  ratio: number;
+};
+type PaneNode = PaneLeaf | PaneSplit;
+type Tab = { id: string; root: PaneNode; activePaneId: string };
+
+// --- pane-tree helpers ---
+function findLeaf(node: PaneNode, id: string): PaneLeaf | null {
+  if (node.kind === "leaf") return node.id === id ? node : null;
+  return findLeaf(node.children[0], id) || findLeaf(node.children[1], id);
+}
+function firstLeafId(node: PaneNode): string {
+  return node.kind === "leaf" ? node.id : firstLeafId(node.children[0]);
+}
+function allLeafIds(node: PaneNode): string[] {
+  return node.kind === "leaf" ? [node.id] : [...allLeafIds(node.children[0]), ...allLeafIds(node.children[1])];
+}
+function mapLeaf(node: PaneNode, id: string, fn: (leaf: PaneLeaf) => PaneLeaf): PaneNode {
+  if (node.kind === "leaf") return node.id === id ? fn(node) : node;
+  return { ...node, children: [mapLeaf(node.children[0], id, fn), mapLeaf(node.children[1], id, fn)] };
+}
+function splitLeaf(root: PaneNode, leafId: string, direction: "row" | "column", newAgentId: string): { root: PaneNode; newLeafId: string } {
+  let newLeafId = "";
+  const walk = (node: PaneNode): PaneNode => {
+    if (node.kind === "leaf") {
+      if (node.id !== leafId) return node;
+      newLeafId = crypto.randomUUID();
+      const newLeaf: PaneLeaf = { kind: "leaf", id: newLeafId, agentId: newAgentId, cwd: node.cwd, epoch: 0 };
+      return { kind: "split", id: crypto.randomUUID(), direction, children: [node, newLeaf], ratio: 0.5 };
+    }
+    return { ...node, children: [walk(node.children[0]), walk(node.children[1])] };
+  };
+  return { root: walk(root), newLeafId };
+}
+function insertSubtreeBeside(
+  root: PaneNode,
+  targetLeafId: string,
+  sub: PaneNode,
+  direction: "row" | "column",
+  position: "before" | "after",
+): PaneNode {
+  const walk = (n: PaneNode): PaneNode => {
+    if (n.kind === "leaf") {
+      if (n.id !== targetLeafId) return n;
+      const children: [PaneNode, PaneNode] = position === "before" ? [sub, n] : [n, sub];
+      return { kind: "split", id: crypto.randomUUID(), direction, children, ratio: 0.5 };
+    }
+    return { ...n, children: [walk(n.children[0]), walk(n.children[1])] };
+  };
+  return walk(root);
+}
+function removeLeaf(root: PaneNode, leafId: string): PaneNode | null {
+  if (root.kind === "leaf") return root.id === leafId ? null : root;
+  const a = removeLeaf(root.children[0], leafId);
+  const b = removeLeaf(root.children[1], leafId);
+  if (!a && !b) return null;
+  if (!a) return b!;
+  if (!b) return a!;
+  return { ...root, children: [a, b] };
+}
+function updateRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
+  if (root.kind === "leaf") return root;
+  if (root.id === splitId) return { ...root, ratio };
+  return { ...root, children: [updateRatio(root.children[0], splitId, ratio), updateRatio(root.children[1], splitId, ratio)] };
+}
+
+// Compute each leaf's virtual rect [x,y,w,h] in the unit square for navigation.
+function leafRects(node: PaneNode, rect: [number, number, number, number]): Array<{ id: string; rect: [number, number, number, number] }> {
+  const [x, y, w, h] = rect;
+  if (node.kind === "leaf") return [{ id: node.id, rect: [x, y, w, h] }];
+  const { direction, children, ratio } = node;
+  if (direction === "row") {
+    return [
+      ...leafRects(children[0], [x, y, w * ratio, h]),
+      ...leafRects(children[1], [x + w * ratio, y, w * (1 - ratio), h]),
+    ];
+  } else {
+    return [
+      ...leafRects(children[0], [x, y, w, h * ratio]),
+      ...leafRects(children[1], [x, y + h * ratio, w, h * (1 - ratio)]),
+    ];
+  }
+}
+
+function findAdjacentPane(root: PaneNode, activeId: string, dir: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown"): string | null {
+  const rects = leafRects(root, [0, 0, 1, 1]);
+  const active = rects.find((r) => r.id === activeId);
+  if (!active) return null;
+  const [ax, ay, aw, ah] = active.rect;
+  const acx = ax + aw / 2, acy = ay + ah / 2;
+  let best: { id: string; score: number } | null = null;
+  for (const c of rects) {
+    if (c.id === activeId) continue;
+    const [cx, cy, cw, ch] = c.rect;
+    const ccx = cx + cw / 2, ccy = cy + ch / 2;
+    let ok = false, score = 0;
+    const EPS = 1e-6;
+    if (dir === "ArrowRight") { ok = cx >= ax + aw - EPS; score = (cx - (ax + aw)) + Math.abs(ccy - acy) * 0.5; }
+    else if (dir === "ArrowLeft") { ok = cx + cw <= ax + EPS; score = (ax - (cx + cw)) + Math.abs(ccy - acy) * 0.5; }
+    else if (dir === "ArrowDown") { ok = cy >= ay + ah - EPS; score = (cy - (ay + ah)) + Math.abs(ccx - acx) * 0.5; }
+    else if (dir === "ArrowUp") { ok = cy + ch <= ay + EPS; score = (ay - (cy + ch)) + Math.abs(ccx - acx) * 0.5; }
+    if (!ok) continue;
+    if (best === null || score < best.score) best = { id: c.id, score };
+  }
+  return best?.id ?? null;
+}
+function migrateTab(raw: any): Tab {
+  if (raw && raw.root) return raw as Tab;
+  // Old flat shape → single-leaf tree.
+  const paneId = crypto.randomUUID();
+  const leaf: PaneLeaf = {
+    kind: "leaf",
+    id: paneId,
+    agentId: raw?.agentId ?? "__shell__",
+    cwd: raw?.cwd ?? "",
+    resumeId: raw?.resumeId,
+    continueLatest: raw?.continueLatest,
+    epoch: raw?.epoch ?? 0,
+  };
+  return { id: raw?.id ?? crypto.randomUUID(), root: leaf, activePaneId: paneId };
+}
 type SessionSummary = { id: string; agentId: string; title: string; modifiedMs: number; messageCount: number };
 type PreviewMessage = { role: string; kind: "text" | "system"; label?: string; text: string };
 type SessionDetail = { id: string; agentId: string; title: string; modifiedMs: number; messages: PreviewMessage[] };
@@ -46,7 +181,21 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 const RECENTS_KEY = "vector.recents";
+const TABS_KEY = "vector.openTabs";
 const MAX_RECENTS = 8;
+
+function loadSavedTabs(): Tab[] {
+  try {
+    const raw = localStorage.getItem(TABS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(migrateTab);
+  } catch { return []; }
+}
+function saveTabs(tabs: Tab[]) {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify(tabs)); } catch {}
+}
 
 function loadPref<T extends string>(key: string, fallback: T): T {
   try { return (localStorage.getItem(key) as T) || fallback; } catch { return fallback; }
@@ -142,6 +291,111 @@ export default function App() {
   const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [picker, setPicker] = useState<PickerState>({ open: true });
+  const tabsLoaded = useRef(false);
+  const activeIdRef = useRef("");
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  const dragFromRef = useRef<number | null>(null);
+  type DndPayload = { kind: "pane"; fromTabId: string; paneId: string } | { kind: "tab"; tabId: string };
+  const dndRef = useRef<DndPayload | null>(null);
+  const getDnd = useCallback(() => dndRef.current, []);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  const movePaneToNewTab = useCallback((fromTabId: string, paneId: string) => {
+    setTabs((prev) => {
+      const src = prev.find((t) => t.id === fromTabId);
+      if (!src) return prev;
+      // Sole pane of a tab → no-op (would just be renaming the tab).
+      if (src.root.kind === "leaf" && src.root.id === paneId) return prev;
+      const leaf = findLeaf(src.root, paneId);
+      if (!leaf) return prev;
+      const newRoot = removeLeaf(src.root, paneId);
+      if (!newRoot) return prev;
+      const newTab: Tab = { id: crypto.randomUUID(), root: { ...leaf }, activePaneId: leaf.id };
+      const updated = prev.map((t) => t.id === fromTabId
+        ? { ...t, root: newRoot, activePaneId: findLeaf(newRoot, t.activePaneId) ? t.activePaneId : firstLeafId(newRoot) }
+        : t);
+      setActiveId(newTab.id);
+      return [...updated, newTab];
+    });
+  }, []);
+
+  const movePaneIntoPane = useCallback((fromTabId: string, paneId: string, toTabId: string, targetPaneId: string, edge: "left" | "right" | "top" | "bottom") => {
+    if (paneId === targetPaneId) return;
+    setTabs((prev) => {
+      const src = prev.find((t) => t.id === fromTabId);
+      if (!src) return prev;
+      const leaf = findLeaf(src.root, paneId);
+      if (!leaf) return prev;
+      const dir: "row" | "column" = edge === "left" || edge === "right" ? "row" : "column";
+      const pos: "before" | "after" = edge === "left" || edge === "top" ? "before" : "after";
+      if (fromTabId === toTabId) {
+        return prev.map((t) => {
+          if (t.id !== fromTabId) return t;
+          const r1 = removeLeaf(t.root, paneId);
+          if (!r1) return t;
+          const r2 = insertSubtreeBeside(r1, targetPaneId, leaf, dir, pos);
+          return { ...t, root: r2, activePaneId: leaf.id };
+        });
+      }
+      const updated: Tab[] = [];
+      for (const t of prev) {
+        if (t.id === fromTabId) {
+          const r = removeLeaf(t.root, paneId);
+          if (!r) continue; // drop empty source tab
+          updated.push({ ...t, root: r, activePaneId: findLeaf(r, t.activePaneId) ? t.activePaneId : firstLeafId(r) });
+        } else if (t.id === toTabId) {
+          updated.push({ ...t, root: insertSubtreeBeside(t.root, targetPaneId, leaf, dir, pos), activePaneId: leaf.id });
+        } else {
+          updated.push(t);
+        }
+      }
+      setActiveId(toTabId);
+      return updated;
+    });
+  }, []);
+
+  const moveTabIntoPane = useCallback((fromTabId: string, toTabId: string, targetPaneId: string, edge: "left" | "right" | "top" | "bottom") => {
+    if (fromTabId === toTabId) return;
+    setTabs((prev) => {
+      const src = prev.find((t) => t.id === fromTabId);
+      if (!src) return prev;
+      const dir: "row" | "column" = edge === "left" || edge === "right" ? "row" : "column";
+      const pos: "before" | "after" = edge === "left" || edge === "top" ? "before" : "after";
+      const activePaneAfter = src.activePaneId;
+      const updated = prev
+        .filter((t) => t.id !== fromTabId)
+        .map((t) => t.id === toTabId
+          ? { ...t, root: insertSubtreeBeside(t.root, targetPaneId, src.root, dir, pos), activePaneId: activePaneAfter }
+          : t);
+      setActiveId(toTabId);
+      return updated;
+    });
+  }, []);
+
+  const onPaneDrop = useCallback((toTabId: string, targetPaneId: string, edge: "left" | "right" | "top" | "bottom") => {
+    const dnd = dndRef.current;
+    dndRef.current = null;
+    if (!dnd) return;
+    if (dnd.kind === "pane") movePaneIntoPane(dnd.fromTabId, dnd.paneId, toTabId, targetPaneId, edge);
+    else moveTabIntoPane(dnd.tabId, toTabId, targetPaneId, edge);
+  }, [movePaneIntoPane, moveTabIntoPane]);
+
+  const moveTab = useCallback((from: number, to: number) => {
+    if (from === to) return;
+    setTabs((prev) => {
+      if (from < 0 || from >= prev.length || to < 0 || to > prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to > from ? to - 1 : to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    // Avoid wiping the persisted list before the initial restore runs.
+    if (!tabsLoaded.current) return;
+    saveTabs(tabs);
+  }, [tabs]);
   const [recents, setRecents] = useState<string[]>([]);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"idle" | "downloading" | "ready" | "error">("idle");
@@ -164,6 +418,21 @@ export default function App() {
       notifReady.current = await ensureNotifPermission();
       // Background update check — don't block startup.
       checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
+      // Restore previously-open tabs. If a user explicitly picked a session,
+      // keep that resumeId; otherwise mark the tab to resume the most-recent
+      // conversation for its project (claude --continue).
+      const saved = loadSavedTabs();
+      if (saved.length > 0) {
+        const restored: Tab[] = saved.map((t) => ({
+          ...t,
+          epoch: (t.epoch ?? 0) + 1,
+          continueLatest: t.resumeId ? t.continueLatest : true,
+        }));
+        setTabs(restored);
+        setActiveId(restored[0].id);
+        setPicker({ open: false });
+      }
+      tabsLoaded.current = true;
     })();
   }, []);
 
@@ -186,9 +455,19 @@ export default function App() {
     setPicker((p) => {
       if (p.forTabId) {
         const id = p.forTabId;
-        setTabs((prev) => prev.map((t) => t.id === id ? { ...t, cwd: path, agentId, resumeId, epoch: t.epoch + 1 } : t));
+        setTabs((prev) => prev.map((t) => {
+          if (t.id !== id) return t;
+          return { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({
+            ...leaf, cwd: path, agentId, resumeId, continueLatest: false, epoch: leaf.epoch + 1,
+          })) };
+        }));
       } else {
-        const t: Tab = { id: crypto.randomUUID(), agentId, cwd: path, resumeId, epoch: 0 };
+        const paneId = crypto.randomUUID();
+        const t: Tab = {
+          id: crypto.randomUUID(),
+          root: { kind: "leaf", id: paneId, agentId, cwd: path, resumeId, epoch: 0 },
+          activePaneId: paneId,
+        };
         setTabs((prev) => [...prev, t]);
         setActiveId(t.id);
       }
@@ -198,21 +477,71 @@ export default function App() {
 
   const closeTab = useCallback((id: string) => {
     setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
       const next = prev.filter((t) => t.id !== id);
-      if (id === activeId && next.length) setActiveId(next[next.length - 1].id);
-      if (!next.length) setPicker({ open: true });
+      if (!next.length) {
+        setPicker({ open: true });
+      } else if (id === activeIdRef.current) {
+        const neighbor = next[Math.min(idx, next.length - 1)];
+        setActiveId(neighbor.id);
+      }
       return next;
     });
     setBellTabs((b) => { const n = new Set(b); n.delete(id); return n; });
     setTabTitles((m) => { if (!(id in m)) return m; const n = { ...m }; delete n[id]; return n; });
-  }, [activeId]);
+  }, []);
+
+  // Close a single pane. If the tab has no panes left, close the tab.
+  const closePane = useCallback((tabId: string, paneId: string) => {
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === tabId);
+      if (!tab) return prev;
+      const newRoot = removeLeaf(tab.root, paneId);
+      if (!newRoot) {
+        // last pane closed → close the whole tab (and let closeTab-equivalent logic run)
+        const idx = prev.findIndex((t) => t.id === tabId);
+        const next = prev.filter((t) => t.id !== tabId);
+        if (!next.length) setPicker({ open: true });
+        else if (tabId === activeIdRef.current) {
+          const neighbor = next[Math.min(idx, next.length - 1)];
+          setActiveId(neighbor.id);
+        }
+        return next;
+      }
+      const newActive = tab.activePaneId === paneId ? firstLeafId(newRoot) : tab.activePaneId;
+      return prev.map((t) => t.id === tabId ? { ...t, root: newRoot, activePaneId: newActive } : t);
+    });
+  }, []);
+
+  const splitActivePane = useCallback((direction: "row" | "column") => {
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === activeIdRef.current);
+      if (!tab) return prev;
+      const activeLeaf = findLeaf(tab.root, tab.activePaneId);
+      const agentId = activeLeaf?.agentId ?? defaultAgent;
+      const { root: newRoot, newLeafId } = splitLeaf(tab.root, tab.activePaneId, direction, agentId);
+      return prev.map((t) => t.id === tab.id ? { ...t, root: newRoot, activePaneId: newLeafId } : t);
+    });
+  }, [defaultAgent]);
+
+  const setActivePane = useCallback((tabId: string, paneId: string) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, activePaneId: paneId } : t));
+  }, []);
+
+  const setSplitRatio = useCallback((tabId: string, splitId: string, ratio: number) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, root: updateRatio(t.root, splitId, ratio) } : t));
+  }, []);
 
   const reloadActive = useCallback(() => {
-    setTabs((prev) => prev.map((t) => t.id === activeId ? { ...t, epoch: t.epoch + 1 } : t));
+    setTabs((prev) => prev.map((t) => t.id === activeId
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, epoch: leaf.epoch + 1 })) }
+      : t));
   }, [activeId]);
 
   const changeActiveAgent = useCallback((agentId: string) => {
-    setTabs((prev) => prev.map((t) => t.id === activeId ? { ...t, agentId, resumeId: undefined, epoch: t.epoch + 1 } : t));
+    setTabs((prev) => prev.map((t) => t.id === activeId
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 })) }
+      : t));
   }, [activeId]);
 
   const onTitle = useCallback((tabId: string, title: string) => {
@@ -224,14 +553,15 @@ export default function App() {
     setBellTabs((b) => { if (!b.has(activeId)) return b; const n = new Set(b); n.delete(activeId); return n; });
   }, [activeId]);
 
-  const onBell = useCallback((tabId: string) => {
+  const onBell = useCallback((tabId: string, paneId: string) => {
     const windowFocused = document.hasFocus();
     const isActive = tabId === activeId;
     if (!windowFocused || !isActive) {
       setBellTabs((b) => { const n = new Set(b); n.add(tabId); return n; });
       const tab = tabs.find((t) => t.id === tabId);
-      const agent = agents.find((a) => a.id === tab?.agentId);
-      const label = agent?.label ?? tab?.agentId ?? "Agent";
+      const leaf = tab ? findLeaf(tab.root, paneId) : null;
+      const agent = agents.find((a) => a.id === leaf?.agentId);
+      const label = agent?.label ?? leaf?.agentId ?? "Agent";
       if (notifReady.current) {
         try { sendNotification({ title: "Vector", body: `${label} needs input` }); } catch {}
       }
@@ -240,9 +570,34 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+Tab / Ctrl+Shift+Tab cycle tabs
+      if (e.ctrlKey && e.key === "Tab" && tabs.length > 1) {
+        e.preventDefault();
+        const currentIdx = tabs.findIndex((t) => t.id === activeId);
+        const base = currentIdx === -1 ? 0 : currentIdx;
+        const delta = e.shiftKey ? -1 : 1;
+        const nextIdx = (base + delta + tabs.length) % tabs.length;
+        setActiveId(tabs[nextIdx].id);
+        return;
+      }
       if (!e.metaKey) return;
       if (e.key === "t" && !e.shiftKey) { e.preventDefault(); openPickerForNewTab(); }
-      else if (e.key === "w" && !e.shiftKey) { e.preventDefault(); if (activeId) closeTab(activeId); }
+      else if (e.key === "w" && !e.shiftKey) {
+        e.preventDefault();
+        const tab = tabs.find((t) => t.id === activeId);
+        if (tab) closePane(tab.id, tab.activePaneId);
+      }
+      else if ((e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        splitActivePane(e.shiftKey ? "column" : "row");
+      }
+      else if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const tab = tabs.find((t) => t.id === activeId);
+        if (!tab) return;
+        const next = findAdjacentPane(tab.root, tab.activePaneId, e.key);
+        if (next) setActivePane(tab.id, next);
+      }
       else if (e.key === "r" || e.key === "R") {
         e.preventDefault();
         if (e.shiftKey) reloadActive();
@@ -252,36 +607,92 @@ export default function App() {
         if (tabs[idx]) { e.preventDefault(); setActiveId(tabs[idx].id); }
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [openPickerForNewTab, closeTab, reloadActive, tabs, activeId]);
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [openPickerForNewTab, closePane, splitActivePane, reloadActive, tabs, activeId]);
 
   const activeTab = tabs.find((t) => t.id === activeId);
+  const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
   const xtermTheme = theme === "light" ? lightTheme : darkTheme;
 
   const tabBar = (
-    <div className="tabs-container">
+    <div
+      className="tabs-container"
+      onDragOver={(e) => {
+        if (dndRef.current?.kind !== "pane") return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(e) => {
+        const d = dndRef.current;
+        if (d?.kind !== "pane") return;
+        e.preventDefault();
+        dndRef.current = null;
+        movePaneToNewTab(d.fromTabId, d.paneId);
+      }}
+    >
       <div className="tabs">
         {tabs.map((t, i) => {
-          const agent = agents.find((a) => a.id === t.agentId);
-          const agentLabel = agent?.label ?? (t.agentId === "__shell__" ? "shell" : t.agentId);
+          const activeLeaf = findLeaf(t.root, t.activePaneId);
+          const tabAgentId = activeLeaf?.agentId ?? "__shell__";
+          const tabCwd = activeLeaf?.cwd ?? "";
+          const agent = agents.find((a) => a.id === tabAgentId);
+          const agentLabel = agent?.label ?? (tabAgentId === "__shell__" ? "shell" : tabAgentId);
           const rawTitle = tabTitles[t.id] || "";
           const stripped = rawTitle
             .replace(new RegExp(`^\\s*${agentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[–—\\-:·|·]?\\s*`, "i"), "")
             .trim();
-          const title = stripped || basename(t.cwd);
+          const title = stripped || basename(tabCwd);
           const classes = ["tab"];
           if (t.id === activeId) classes.push("active");
           if (bellTabs.has(t.id)) classes.push("bell");
           return (
-            <div key={t.id} className={classes.join(" ")} onClick={() => setActiveId(t.id)} title={`⌘${i + 1} · ${agentLabel} · ${t.cwd}`}>
-              <span className="agent-chip"><AgentIcon id={t.agentId} size={14} /></span>
+            <div
+              key={t.id}
+              className={classes.join(" ")}
+              onClick={() => setActiveId(t.id)}
+              title={`⌘${i + 1} · ${agentLabel} · ${tabCwd}`}
+              draggable
+              onDragStart={(e) => {
+                dragFromRef.current = i;
+                dndRef.current = { kind: "tab", tabId: t.id };
+                // Some webviews require dataTransfer data for drop events to fire.
+                e.dataTransfer.effectAllowed = "move";
+                try { e.dataTransfer.setData("text/plain", String(i)); } catch {}
+              }}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const from = dragFromRef.current;
+                dragFromRef.current = null;
+                if (from != null) moveTab(from, i);
+              }}
+              onDragEnd={() => { dragFromRef.current = null; dndRef.current = null; }}
+            >
+              <span className="agent-chip"><AgentIcon id={tabAgentId} size={14} /></span>
               <span className="tab-label">{title}</span>
+              {(() => { const n = allLeafIds(t.root).length; return n > 1 ? <span className="tab-pane-count">{n}</span> : null; })()}
               <span className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>
             </div>
           );
         })}
-        <button className="tab-new" onClick={openPickerForNewTab} title="New tab (⌘T)">+</button>
+        <button
+          className="tab-new"
+          onClick={openPickerForNewTab}
+          title="New tab (⌘T)"
+          onDragOver={(e) => {
+            if (dndRef.current?.kind !== "pane") return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(e) => {
+            const d = dndRef.current;
+            if (d?.kind !== "pane") return;
+            e.preventDefault();
+            dndRef.current = null;
+            movePaneToNewTab(d.fromTabId, d.paneId);
+          }}
+        >+</button>
       </div>
     </div>
   );
@@ -302,24 +713,33 @@ export default function App() {
     <>
       {update && (
         <div className="update-banner">
-          <span>Vector {update.version} is available.</span>
-          {updateStatus === "idle" && <button className="update-btn" onClick={installUpdate}>Update & restart</button>}
-          {updateStatus === "downloading" && <span className="update-status">Downloading…</span>}
-          {updateStatus === "ready" && <span className="update-status">Restarting…</span>}
-          {updateStatus === "error" && <button className="update-btn" onClick={installUpdate}>Retry</button>}
-          <button className="icon-btn" onClick={() => setUpdate(null)} aria-label="Dismiss">×</button>
+          <div className="update-row">
+            <span>Vector {update.version} is available.</span>
+            {update.body && (
+              <details className="update-notes">
+                <summary>What’s new</summary>
+                <pre className="update-notes-body">{update.body}</pre>
+              </details>
+            )}
+            <div className="spacer" />
+            {updateStatus === "idle" && <button className="update-btn" onClick={installUpdate}>Update & restart</button>}
+            {updateStatus === "downloading" && <span className="update-status">Downloading…</span>}
+            {updateStatus === "ready" && <span className="update-status">Restarting…</span>}
+            {updateStatus === "error" && <button className="update-btn" onClick={installUpdate}>Retry</button>}
+            <button className="icon-btn" onClick={() => setUpdate(null)} aria-label="Dismiss">×</button>
+          </div>
         </div>
       )}
       <div className="topbar">
-        {activeTab ? (
-          <button className="project-btn" onClick={() => openPickerForTab(activeTab.id)} title={activeTab.cwd}>
-            <VectorMark size={14} /> {basename(activeTab.cwd)}
+        {activeTab && activeLeaf ? (
+          <button className="project-btn" onClick={() => openPickerForTab(activeTab.id)} title={activeLeaf.cwd}>
+            <VectorMark size={14} /> {basename(activeLeaf.cwd)}
           </button>
         ) : <div style={{ flex: "0 0 auto" }} />}
         <select
-          value={activeTab?.agentId ?? ""}
+          value={activeLeaf?.agentId ?? ""}
           onChange={(e) => changeActiveAgent(e.target.value)}
-          disabled={!activeTab}
+          disabled={!activeLeaf}
         >
           {agents.filter((a) => a.available).map((a) => (
             <option key={a.id} value={a.id}>{a.label}</option>
@@ -329,7 +749,27 @@ export default function App() {
         <button className="icon-btn" onClick={reloadActive} title="Reload agent (⌘⇧R)" disabled={!activeTab}>↻</button>
         <div className="spacer" />
         <div className="settings">
-          <button className="icon-btn" onClick={() => setSettingsOpen((o) => !o)} title="Settings" aria-label="Settings">
+          <button className="icon-btn" onClick={() => { setShortcutsOpen((o) => !o); setSettingsOpen(false); }} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
+            <KeyboardIcon />
+          </button>
+          {shortcutsOpen && (
+            <div className="settings-panel shortcuts-panel" onMouseLeave={() => setShortcutsOpen(false)}>
+              <div className="shortcuts-title">Keyboard shortcuts</div>
+              <div className="shortcuts-list">
+                <Shortcut keys="⌘ + T" label="New tab" />
+                <Shortcut keys="⌘ + W" label="Close active pane" />
+                <Shortcut keys="⌘ + D" label="Split pane right" />
+                <Shortcut keys="⌘ + ⇧ + D" label="Split pane down" />
+                <Shortcut keys="⌘ + ⌥ + arrow" label="Focus adjacent pane" />
+                <Shortcut keys="⌘ + ⇧ + R" label="Reload active pane" />
+                <Shortcut keys="⌘ + 1–9" label="Switch tab" />
+                <Shortcut keys="Ctrl + Tab" label="Next tab" />
+                <Shortcut keys="Ctrl + ⇧ + Tab" label="Previous tab" />
+                <Shortcut keys="⇧ + Enter" label="Multi-line input (Claude Code)" />
+              </div>
+            </div>
+          )}
+          <button className="icon-btn" onClick={() => { setSettingsOpen((o) => !o); setShortcutsOpen(false); }} title="Settings" aria-label="Settings">
             <GearIcon />
           </button>
           {settingsOpen && (
@@ -356,18 +796,25 @@ export default function App() {
         {tabs.length > 0 && tabBar}
         <div className="terms">
           {tabs.map((t) => (
-            <TerminalView
-              key={`${t.id}-${t.epoch}`}
-              tabId={t.id}
-              agentId={t.agentId}
-              cwd={t.cwd}
-              resumeId={t.resumeId}
-              visible={t.id === activeId}
-              theme={xtermTheme}
-              onBell={onBell}
-              onTitle={onTitle}
-              onExit={closeTab}
-            />
+            <div key={t.id} className="tab-panes" style={{ display: t.id === activeId ? "flex" : "none" }}>
+              <PaneView
+                tabId={t.id}
+                root={t.root}
+                activePaneId={t.activePaneId}
+                tabVisible={t.id === activeId}
+                theme={xtermTheme}
+                onFocusPane={(pid) => setActivePane(t.id, pid)}
+                onBell={onBell}
+                onTitle={onTitle}
+                onExitPane={(pid) => closePane(t.id, pid)}
+                onResize={(sid, ratio) => setSplitRatio(t.id, sid, ratio)}
+                onPaneDragStart={(pid) => { dndRef.current = { kind: "pane", fromTabId: t.id, paneId: pid }; }}
+                onPaneDragEnd={() => { dndRef.current = null; }}
+                onPaneDrop={(targetPid, edge) => onPaneDrop(t.id, targetPid, edge)}
+                getDndKind={() => dndRef.current?.kind ?? null}
+                getDndPaneId={() => dndRef.current?.kind === "pane" ? dndRef.current.paneId : null}
+              />
+            </div>
           ))}
           {!tabs.length && !picker.open && <div className="empty">No tabs. ⌘T to open one.</div>}
         </div>
@@ -384,6 +831,24 @@ export default function App() {
         />
       )}
     </>
+  );
+}
+
+function KeyboardIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2" y="6" width="20" height="13" rx="2" />
+      <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 15h10" />
+    </svg>
+  );
+}
+
+function Shortcut({ keys, label }: { keys: string; label: string }) {
+  return (
+    <div className="shortcut-row">
+      <span className="shortcut-keys">{keys}</span>
+      <span className="shortcut-label">{label}</span>
+    </div>
   );
 }
 
@@ -614,31 +1079,214 @@ function PickerModal({
   );
 }
 
+type PaneViewProps = {
+  tabId: string;
+  root: PaneNode;
+  activePaneId: string;
+  tabVisible: boolean;
+  theme: ITheme;
+  onFocusPane: (paneId: string) => void;
+  onBell: (tabId: string, paneId: string) => void;
+  onTitle: (tabId: string, title: string) => void;
+  onExitPane: (paneId: string) => void;
+  onResize: (splitId: string, ratio: number) => void;
+  onPaneDragStart: (paneId: string) => void;
+  onPaneDragEnd: () => void;
+  onPaneDrop: (targetPaneId: string, edge: "left" | "right" | "top" | "bottom") => void;
+  getDndKind: () => "pane" | "tab" | null;
+  getDndPaneId: () => string | null;
+};
+
+function flattenLeaves(node: PaneNode): PaneLeaf[] {
+  return node.kind === "leaf" ? [node] : [...flattenLeaves(node.children[0]), ...flattenLeaves(node.children[1])];
+}
+
+type DividerInfo = { id: string; direction: "row" | "column"; pos: number; container: [number, number, number, number]; ratio: number };
+function computeDividers(node: PaneNode, rect: [number, number, number, number]): DividerInfo[] {
+  if (node.kind === "leaf") return [];
+  const [x, y, w, h] = rect;
+  const { direction, children, ratio, id } = node;
+  if (direction === "row") {
+    const sx = x + w * ratio;
+    return [
+      { id, direction, pos: sx, container: rect, ratio },
+      ...computeDividers(children[0], [x, y, w * ratio, h]),
+      ...computeDividers(children[1], [sx, y, w * (1 - ratio), h]),
+    ];
+  } else {
+    const sy = y + h * ratio;
+    return [
+      { id, direction, pos: sy, container: rect, ratio },
+      ...computeDividers(children[0], [x, y, w, h * ratio]),
+      ...computeDividers(children[1], [x, sy, w, h * (1 - ratio)]),
+    ];
+  }
+}
+
+function PaneView(props: PaneViewProps) {
+  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId } = props;
+  const leaves = flattenLeaves(root);
+  const rects = leafRects(root, [0, 0, 1, 1]);
+  const dividers = computeDividers(root, [0, 0, 1, 1]);
+  const rectFor = (id: string) => rects.find((r) => r.id === id)!.rect;
+  const showClose = leaves.length > 1;
+  const single = leaves.length === 1;
+
+  return (
+    <div className="tab-panes-layout">
+      {leaves.map((leaf) => {
+        const [x, y, w, h] = rectFor(leaf.id);
+        const isActive = leaf.id === activePaneId;
+        const EPS = 1e-6;
+        const R = "var(--pane-radius, 6px)";
+        const tl = x < EPS && y < EPS ? R : "0";
+        const tr = x + w > 1 - EPS && y < EPS ? R : "0";
+        const br = x + w > 1 - EPS && y + h > 1 - EPS ? R : "0";
+        const bl = x < EPS && y + h > 1 - EPS ? R : "0";
+        return (
+          <div
+            key={leaf.id}
+            className={`pane${isActive ? " pane-active" : ""}${single ? " pane-solo" : ""}`}
+            style={{
+              position: "absolute",
+              left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%`,
+              borderRadius: `${tl} ${tr} ${br} ${bl}`,
+              overflow: "hidden",
+            }}
+            onMouseDown={() => onFocusPane(leaf.id)}
+            onDragOver={(e) => {
+              const kind = getDndKind();
+              if (!kind) return;
+              if (kind === "pane" && getDndPaneId() === leaf.id) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+            }}
+            onDrop={(e) => {
+              const kind = getDndKind();
+              if (!kind) return;
+              if (kind === "pane" && getDndPaneId() === leaf.id) return;
+              e.preventDefault();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const dx = (e.clientX - r.left) / r.width;
+              const dy = (e.clientY - r.top) / r.height;
+              const edge: "left" | "right" | "top" | "bottom" =
+                Math.min(dx, 1 - dx) < Math.min(dy, 1 - dy)
+                  ? (dx < 0.5 ? "left" : "right")
+                  : (dy < 0.5 ? "top" : "bottom");
+              onPaneDrop(leaf.id, edge);
+            }}
+          >
+            <div
+              className="pane-grip"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                try { e.dataTransfer.setData("text/plain", "pane"); } catch {}
+                onPaneDragStart(leaf.id);
+              }}
+              onDragEnd={() => onPaneDragEnd()}
+              onMouseDown={(e) => e.stopPropagation()}
+              title="Drag to move pane"
+              aria-label="Drag pane"
+            >⋮⋮</div>
+            <TerminalView
+              key={`${leaf.id}-${leaf.epoch}`}
+              tabId={tabId}
+              paneId={leaf.id}
+              agentId={leaf.agentId}
+              cwd={leaf.cwd}
+              resumeId={leaf.resumeId}
+              continueLatest={leaf.continueLatest}
+              visible={tabVisible}
+              focused={isActive}
+              theme={theme}
+              onBell={onBell}
+              onTitle={onTitle}
+              onExit={() => onExitPane(leaf.id)}
+            />
+            {showClose && (
+              <button
+                className="pane-close"
+                onClick={(e) => { e.stopPropagation(); onExitPane(leaf.id); }}
+                title="Close pane (⌘W)"
+                aria-label="Close pane"
+              >×</button>
+            )}
+          </div>
+        );
+      })}
+      {dividers.map((d) => (
+        <Divider key={d.id} info={d} onResize={onResize} />
+      ))}
+    </div>
+  );
+}
+
+function Divider({ info, onResize }: { info: DividerInfo; onResize: (splitId: string, ratio: number) => void }) {
+  const { direction, pos, container, ratio } = info;
+  const [cx, cy, cw, ch] = container;
+  const style: any = direction === "row"
+    ? { position: "absolute", left: `calc(${pos * 100}% - 2px)`, top: `${cy * 100}%`, width: "4px", height: `${ch * 100}%` }
+    : { position: "absolute", top: `calc(${pos * 100}% - 2px)`, left: `${cx * 100}%`, height: "4px", width: `${cw * 100}%` };
+
+  const onDown = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const parent = (e.currentTarget as HTMLElement).parentElement!;
+    const prect = parent.getBoundingClientRect();
+    const axisPx = direction === "row" ? prect.width : prect.height;
+    const startPixel = direction === "row" ? e.clientX : e.clientY;
+    const containerSize = direction === "row" ? cw : ch;
+    const startRatio = ratio;
+    const onMove = (ev: MouseEvent) => {
+      const p = direction === "row" ? ev.clientX : ev.clientY;
+      const deltaU = (p - startPixel) / axisPx; // fraction of full parent
+      const local = startRatio + deltaU / containerSize;
+      onResize(info.id, Math.max(0.05, Math.min(0.95, local)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  return <div className={`divider divider-${direction}`} style={style} onMouseDown={onDown} />;
+}
+
 function TerminalView({
   tabId,
+  paneId,
   agentId,
   cwd,
   resumeId,
+  continueLatest,
   visible,
+  focused,
   theme,
   onBell,
   onTitle,
   onExit,
 }: {
   tabId: string;
+  paneId: string;
   agentId: string;
   cwd: string;
   resumeId?: string;
+  continueLatest?: boolean;
   visible: boolean;
+  focused: boolean;
   theme: ITheme;
-  onBell: (tabId: string) => void;
+  onBell: (tabId: string, paneId: string) => void;
   onTitle: (tabId: string, title: string) => void;
-  onExit: (tabId: string) => void;
+  onExit: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const focusedRef = useRef(focused);
+  useEffect(() => { focusedRef.current = focused; }, [focused]);
 
   useEffect(() => { if (termRef.current) termRef.current.options.theme = theme; }, [theme]);
 
@@ -658,7 +1306,7 @@ function TerminalView({
     term.open(wrapRef.current);
     termRef.current = term;
     fitRef.current = fit;
-    term.onBell(() => onBell(tabId));
+    term.onBell(() => onBell(tabId, paneId));
     term.onTitleChange((t) => { if (t) onTitle(tabId, t); });
 
     const sessionId = crypto.randomUUID();
@@ -695,11 +1343,11 @@ function TerminalView({
       const cols = term.cols || 100;
       const rows = term.rows || 30;
       try {
-        await invoke("start_session", { sessionId, agentId, cols, rows, cwd, resumeId: resumeId ?? null });
+        await invoke("start_session", { sessionId, agentId, cols, rows, cwd, resumeId: resumeId ?? null, continueLatest: continueLatest ?? false });
       } catch (err) {
         term.writeln(`\r\n\x1b[31m[failed to start agent: ${err}]\x1b[0m`);
       }
-      if (visible) term.focus();
+      if (visible && focused) term.focus();
       // Post-start nudge: some agents (e.g. Claude Code) draw their welcome
       // banner once at launch and never redraw unless SIGWINCH changes size.
       // Send cols-1 then cols back so a redraw is triggered.
@@ -731,7 +1379,7 @@ function TerminalView({
     (async () => {
       unlistenData = await listen<string>(`pty-data-${sessionId}`, (e) => term.write(e.payload));
       unlistenExit = await listen<number>(`pty-exit-${sessionId}`, () => {
-        onExit(tabId);
+        onExit();
       });
 
       term.onData((data) => { invoke("write_stdin", { sessionId, data }).catch(() => {}); });
@@ -758,7 +1406,10 @@ function TerminalView({
     });
     if (wrapRef.current) ro.observe(wrapRef.current);
 
-    const onWinFocus = () => { if (wrapRef.current?.style.display !== "none") term.focus(); };
+    const onWinFocus = () => {
+      if (!wrapRef.current || wrapRef.current.offsetParent === null) return;
+      if (focusedRef.current) term.focus();
+    };
     window.addEventListener("focus", onWinFocus);
 
     return () => {
@@ -773,16 +1424,16 @@ function TerminalView({
       term.dispose();
       termRef.current = null;
     };
-  }, [tabId, agentId, cwd, resumeId]);
+  }, [tabId, agentId, cwd, resumeId, continueLatest]);
 
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
       try { fitRef.current?.fit(); } catch {}
-      termRef.current?.focus();
+      if (focused) termRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
-  }, [visible]);
+  }, [visible, focused]);
 
   return (
     <div

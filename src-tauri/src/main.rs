@@ -59,6 +59,7 @@ async fn start_session(
     rows: u16,
     cwd: Option<String>,
     resume_id: Option<String>,
+    continue_latest: Option<bool>,
 ) -> Result<(), String> {
     let (program, mut env) = {
         let cfg = state.config.lock();
@@ -83,12 +84,17 @@ async fn start_session(
         }
     }
 
-    // Append agent-specific resume arguments.
-    if let Some(sid) = resume_id.as_ref().filter(|s| !s.is_empty()) {
-        match agent_id.as_str() {
-            "claude" => { resolved.push("--resume".into()); resolved.push(sid.clone()); }
-            _ => {} // other agents: no-op for now
+    // Append agent-specific session arguments.
+    match agent_id.as_str() {
+        "claude" => {
+            if let Some(sid) = resume_id.as_ref().filter(|s| !s.is_empty()) {
+                resolved.push("--resume".into());
+                resolved.push(sid.clone());
+            } else if continue_latest.unwrap_or(false) {
+                resolved.push("--continue".into());
+            }
         }
+        _ => {}
     }
 
     // Also inject the augmented PATH so child processes spawned by the agent
@@ -152,6 +158,7 @@ async fn get_session(agent_id: String, cwd: String, session_id: String) -> Resul
 async fn supported_resume_agents() -> Result<Vec<String>, String> {
     Ok(vec!["claude".into()])
 }
+
 
 fn main() {
     tauri::Builder::default()
