@@ -22,29 +22,58 @@ fn store_info(path: &Path, modified_ms: u64, info: CachedInfo) {
 }
 
 // Read up to 4 MB of a session file, compute title + message count in one pass.
+//
+// Title preference (strongest → weakest):
+//   1. custom-title line (user-set via `/title`) — last occurrence wins
+//   2. agent-name line (named agents) — last occurrence wins
+//   3. first non-system user message text
 fn scan_file_summary(path: &Path) -> CachedInfo {
     let Ok(file) = File::open(path) else { return CachedInfo { title: String::new(), msg_count: 0 } };
     let mut raw: Vec<u8> = Vec::new();
     let _ = file.take(4 * 1024 * 1024).read_to_end(&mut raw);
 
-    // Count meaningful message lines by parsing each line's "type" cheaply.
     let text = match std::str::from_utf8(&raw) { Ok(s) => s, Err(_) => return CachedInfo { title: String::new(), msg_count: 0 } };
-    let mut title = String::new();
+    let mut custom_title = String::new();
+    let mut agent_name = String::new();
+    let mut first_user_title = String::new();
     let mut msg_count: u32 = 0;
     for line in text.lines() {
         if line.trim().is_empty() { continue; }
-        // Cheap substring test before parsing
+
+        if line.contains("\"type\":\"custom-title\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(s) = v.get("customTitle").and_then(|s| s.as_str()) {
+                    let s = s.trim();
+                    if !s.is_empty() { custom_title = truncate(s, 80); }
+                }
+            }
+            continue;
+        }
+        if line.contains("\"type\":\"agent-name\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(s) = v.get("agentName").and_then(|s| s.as_str()) {
+                    let s = s.trim();
+                    if !s.is_empty() { agent_name = truncate(s, 80); }
+                }
+            }
+            continue;
+        }
+
         let is_msg = line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"");
         if !is_msg { continue; }
         msg_count += 1;
-        if title.is_empty() && line.contains("\"type\":\"user\"") {
+        if first_user_title.is_empty() && line.contains("\"type\":\"user\"") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if let Some(t) = extract_text(v.get("message")) {
-                    if classify_system(&t).is_none() { title = truncate(&t, 80); }
+                    if classify_system(&t).is_none() { first_user_title = truncate(&t, 80); }
                 }
             }
         }
     }
+
+    let title = if !custom_title.is_empty() { custom_title }
+        else if !agent_name.is_empty() { agent_name }
+        else { first_user_title };
     CachedInfo { title, msg_count }
 }
 
@@ -246,16 +275,32 @@ pub fn get_claude_session(cwd: &Path, session_id: &str) -> Option<SessionDetail>
     let content = fs::read_to_string(&path).ok()?;
     let modified_ms = file_modified_ms(&path);
     let mut messages = vec![];
-    let mut title = String::new();
+    let mut custom_title = String::new();
+    let mut agent_name = String::new();
+    let mut first_user_title = String::new();
     for line in content.lines() {
         if line.trim().is_empty() { continue; }
         let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
         let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if t == "custom-title" {
+            if let Some(s) = v.get("customTitle").and_then(|s| s.as_str()) {
+                let s = s.trim();
+                if !s.is_empty() { custom_title = truncate(s, 80); }
+            }
+            continue;
+        }
+        if t == "agent-name" {
+            if let Some(s) = v.get("agentName").and_then(|s| s.as_str()) {
+                let s = s.trim();
+                if !s.is_empty() { agent_name = truncate(s, 80); }
+            }
+            continue;
+        }
         if t == "user" || t == "assistant" {
             if let Some(text) = extract_text(v.get("message")) {
                 let sys = classify_system(&text);
-                if title.is_empty() && t == "user" && sys.is_none() {
-                    title = truncate(&text, 80);
+                if first_user_title.is_empty() && t == "user" && sys.is_none() {
+                    first_user_title = truncate(&text, 80);
                 }
                 messages.push(match sys {
                     Some(label) => PreviewMessage {
@@ -274,5 +319,8 @@ pub fn get_claude_session(cwd: &Path, session_id: &str) -> Option<SessionDetail>
             }
         }
     }
+    let title = if !custom_title.is_empty() { custom_title }
+        else if !agent_name.is_empty() { agent_name }
+        else { first_user_title };
     Some(SessionDetail { id: session_id.into(), agent_id: "claude".into(), title, modified_ms, messages })
 }

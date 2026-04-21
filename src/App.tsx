@@ -1136,28 +1136,31 @@ function PickerModal({
                 autoFocus
               />
             )}
-            {sessionsLoading ? (
-              <div className="session-muted">Loading…</div>
-            ) : sessions.length === 0 ? (
-              <div className="session-muted">
-                {agentId === "claude" ? "No previous sessions in this project." : "Resume isn't supported for this agent yet."}
-              </div>
-            ) : (
-              sessions.map((s) => (
-                <button
-                  key={s.id}
-                  className={`session-row${selectedId === s.id ? " selected" : ""}`}
-                  onClick={() => setSelectedId(s.id)}
-                  onDoubleClick={() => project && onPick(project, agentId, s.id)}
-                  title={s.title}
-                >
-                  <div className="session-title">{s.title || "(untitled)"}</div>
-                  <div className="session-meta">
-                    <span title={new Date(s.modifiedMs).toLocaleString()}>{relativeTime(s.modifiedMs)}</span>
-                    {s.messageCount > 0 && <span>· {s.messageCount} messages</span>}
-                  </div>
-                </button>
-              )))}
+            <div className="session-rows">
+              {sessionsLoading ? (
+                <div className="session-muted">Loading…</div>
+              ) : sessions.length === 0 ? (
+                <div className="session-muted">
+                  {agentId === "claude" ? "No previous sessions in this project." : "Resume isn't supported for this agent yet."}
+                </div>
+              ) : (
+                sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    className={`session-row${selectedId === s.id ? " selected" : ""}`}
+                    onClick={() => setSelectedId(s.id)}
+                    onDoubleClick={() => project && onPick(project, agentId, s.id)}
+                    title={s.title}
+                  >
+                    <div className="session-title">{s.title || "(untitled)"}</div>
+                    <div className="session-meta">
+                      <span title={new Date(s.modifiedMs).toLocaleString()}>{relativeTime(s.modifiedMs)}</span>
+                      {s.messageCount > 0 && <span>· {s.messageCount} messages</span>}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
           <div className="session-preview">
             {previewLoading ? (
