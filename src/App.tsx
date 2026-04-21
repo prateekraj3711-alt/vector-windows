@@ -13,6 +13,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
 
@@ -1304,15 +1305,23 @@ function TerminalView({
     if (!wrapRef.current) return;
 
     const term = new Terminal({
-      fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
+      fontFamily: '"JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, "SF Mono", Menlo, "Apple Symbols", "Apple Color Emoji", "Segoe UI Symbol", monospace',
       fontSize: 13,
       cursorBlink: true,
       theme,
       allowProposedApi: true,
+      scrollback: 10000,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    // Swallow OSC 777 (Claude Code remote-control "warp://cli-agent;{...}"
+    // notifications). xterm.js's OSC parser trips over the nested JSON and
+    // bleeds the payload into the on-screen buffer. We have no use for them,
+    // so consume and drop.
+    term.parser.registerOscHandler(777, () => true);
     term.open(wrapRef.current);
     termRef.current = term;
     fitRef.current = fit;
@@ -1323,20 +1332,36 @@ function TerminalView({
     sessionRef.current = sessionId;
 
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === "keydown" && e.key === "Enter" && e.shiftKey) return false;
+      if (e.type !== "keydown") return true;
+      if (e.key === "Enter" && e.shiftKey) return false;
+      // Let our document-capture handler own Cmd/Opt+Backspace.
+      if (e.key === "Backspace" && (e.metaKey || e.altKey)) return false;
       return true;
     });
 
-    // Document-capture: intercept Shift+Enter before the webview/xterm handle it
-    // and send ESC+CR (the sequence Claude Code's /terminal-setup maps to multi-line).
+    // Document-capture: intercept shortcuts before the webview/xterm handle them
+    // and forward the right readline sequence over the PTY.
     const onDocKey = (e: KeyboardEvent) => {
       if (e.type !== "keydown") return;
-      if (e.key !== "Enter" || !e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
       if (!wrapRef.current || wrapRef.current.style.display === "none") return;
       if (!wrapRef.current.contains(document.activeElement)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      invoke("write_stdin", { sessionId, data: "\x1b\r" }).catch(() => {});
+      const send = (data: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        invoke("write_stdin", { sessionId, data }).catch(() => {});
+      };
+      if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // Shift+Enter → ESC+CR (Claude Code's /terminal-setup multi-line).
+        return send("\x1b\r");
+      }
+      if (e.key === "Backspace" && e.metaKey && !e.ctrlKey) {
+        // Cmd+Backspace → kill line backwards (Ctrl+U).
+        return send("\x15");
+      }
+      if (e.key === "Backspace" && e.altKey && !e.metaKey && !e.ctrlKey) {
+        // Opt+Backspace → kill word backwards (Ctrl+W).
+        return send("\x17");
+      }
     };
     document.addEventListener("keydown", onDocKey, true);
 
@@ -1353,7 +1378,15 @@ function TerminalView({
       const cols = term.cols || 100;
       const rows = term.rows || 30;
       try {
-        await invoke("start_session", { sessionId, agentId, cols, rows, cwd, resumeId: resumeId ?? null, continueLatest: continueLatest ?? false });
+        // Shrink both xterm AND the PTY by a 2-col safety margin. fit.fit()
+        // sometimes over-reports cols by a fraction, so a "full-width" agent
+        // line wraps by one column and shifts every subsequent row, breaking
+        // the diff-based repaint. Keeping them equal means there are no
+        // rightmost cells that the agent never paints (and therefore no stale
+        // glyph residue there either).
+        const ptyCols = Math.max(20, cols - 3);
+        try { term.resize(ptyCols, rows); } catch {}
+        await invoke("start_session", { sessionId, agentId, cols: ptyCols, rows, cwd, resumeId: resumeId ?? null, continueLatest: continueLatest ?? false });
       } catch (err) {
         term.writeln(`\r\n\x1b[31m[failed to start agent: ${err}]\x1b[0m`);
       }
@@ -1397,7 +1430,11 @@ function TerminalView({
       pollTimer = window.setTimeout(poll, 60);
     };
     const ro = new ResizeObserver(() => {
-      try { fit.fit(); } catch {}
+      try {
+        fit.fit();
+        const safeCols = Math.max(20, term.cols - 3);
+        if (term.cols !== safeCols) term.resize(safeCols, term.rows);
+      } catch {}
       if (!started) schedulePoll();
     });
     if (wrapRef.current) ro.observe(wrapRef.current);

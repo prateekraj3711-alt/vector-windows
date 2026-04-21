@@ -115,7 +115,7 @@ async fn start_session(
         .or_else(|| std::env::current_dir().ok())
         .or_else(dirs::home_dir);
     state.registry
-        .spawn(app, session_id, &resolved, &env, cwd, cols, rows)
+        .spawn(app, session_id, &resolved, &env, cwd, cols, rows, agent_id == "claude")
         .map_err(|e| e.to_string())
 }
 
