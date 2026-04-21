@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -16,6 +16,70 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
+
+// Minimal markdown → JSX renderer for the "What's new" modal. Supports the
+// subset we actually write in release notes: `##` headings, `-` list items,
+// `**bold**`, `` `code` ``, and `[label](url)` links. Anything else falls
+// through as plain text — good enough for hand-authored release bodies.
+function renderInline(text: string, k0 = 0): ReactNode[] {
+  const out: ReactNode[] = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)/g;
+  let last = 0, m: RegExpExecArray | null, k = k0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) out.push(<strong key={k++}>{m[1]}</strong>);
+    else if (m[2] !== undefined) out.push(<code key={k++}>{m[2]}</code>);
+    else if (m[3] !== undefined) {
+      const url = m[4];
+      out.push(
+        <a key={k++} href="#" onClick={(e) => { e.preventDefault(); invoke("open_path", { path: url }).catch(() => {}); }}>{m[3]}</a>
+      );
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function renderMarkdown(md: string): ReactNode[] {
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let list: string[] | null = null;
+  let para: string[] | null = null;
+  let key = 0;
+  const flushList = () => {
+    if (list) {
+      const items = list;
+      blocks.push(<ul key={key++} className="wn-list">{items.map((l, i) => <li key={i}>{renderInline(l)}</li>)}</ul>);
+      list = null;
+    }
+  };
+  const flushPara = () => {
+    if (para && para.length) {
+      blocks.push(<p key={key++}>{renderInline(para.join(" "))}</p>);
+      para = null;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^#{1,6}\s+/.test(line)) {
+      flushList(); flushPara();
+      blocks.push(<h3 key={key++} className="wn-h">{renderInline(line.replace(/^#{1,6}\s+/, ""))}</h3>);
+    } else if (/^[-*]\s+/.test(line)) {
+      flushPara();
+      if (!list) list = [];
+      list.push(line.replace(/^[-*]\s+/, ""));
+    } else if (line.trim() === "") {
+      flushList(); flushPara();
+    } else {
+      flushList();
+      if (!para) para = [];
+      para.push(line);
+    }
+  }
+  flushList(); flushPara();
+  return blocks;
+}
 
 type AgentMeta = { id: string; label: string; available: boolean };
 
@@ -404,6 +468,8 @@ export default function App() {
   const [recents, setRecents] = useState<string[]>([]);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"idle" | "downloading" | "ready" | "error">("idle");
+  const [showNotes, setShowNotes] = useState(false);
+  const [updateCheck, setUpdateCheck] = useState<null | "checking" | "uptodate" | "error">(null);
   const notifReady = useRef(false);
 
   useEffect(() => { document.body.className = theme === "light" ? "theme-light" : "theme-dark"; try { localStorage.setItem("vector.theme", theme); } catch {} }, [theme]);
@@ -720,6 +786,31 @@ export default function App() {
     }
   };
 
+  const runUpdateCheck = useCallback(async () => {
+    setUpdateCheck("checking");
+    try {
+      const u = await checkUpdate();
+      if (u) {
+        setUpdate(u);
+        setUpdateCheck(null);
+      } else {
+        setUpdateCheck("uptodate");
+        setTimeout(() => setUpdateCheck((s) => s === "uptodate" ? null : s), 3000);
+      }
+    } catch {
+      setUpdateCheck("error");
+      setTimeout(() => setUpdateCheck((s) => s === "error" ? null : s), 3000);
+    }
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    listen("menu://check-updates", () => { runUpdateCheck(); })
+      .then((u) => { unlisten = u; })
+      .catch(() => {});
+    return () => { if (unlisten) unlisten(); };
+  }, [runUpdateCheck]);
+
   return (
     <>
       {update && (
@@ -727,10 +818,7 @@ export default function App() {
           <div className="update-row">
             <span>Vector {update.version} is available.</span>
             {update.body && (
-              <details className="update-notes">
-                <summary>What’s new</summary>
-                <pre className="update-notes-body">{update.body}</pre>
-              </details>
+              <button className="update-notes-btn" onClick={() => setShowNotes(true)}>What’s new</button>
             )}
             <div className="spacer" />
             {updateStatus === "idle" && <button className="update-btn" onClick={installUpdate}>Update & restart</button>}
@@ -739,6 +827,24 @@ export default function App() {
             {updateStatus === "error" && <button className="update-btn" onClick={installUpdate}>Retry</button>}
             <button className="icon-btn" onClick={() => setUpdate(null)} aria-label="Dismiss">×</button>
           </div>
+        </div>
+      )}
+      {showNotes && update?.body && (
+        <div className="picker-overlay" onClick={() => setShowNotes(false)}>
+          <div className="picker-card whatsnew-card" onClick={(e) => e.stopPropagation()}>
+            <div className="picker-head">
+              <div className="picker-brand"><VectorMark size={14} /> What’s new in {update.version}</div>
+              <button className="icon-btn" onClick={() => setShowNotes(false)} aria-label="Close">×</button>
+            </div>
+            <div className="whatsnew-body">{renderMarkdown(update.body)}</div>
+          </div>
+        </div>
+      )}
+      {updateCheck && !update && (
+        <div className="update-toast" role="status">
+          {updateCheck === "checking" && "Checking for updates…"}
+          {updateCheck === "uptodate" && "You're on the latest version."}
+          {updateCheck === "error" && "Update check failed. Try again later."}
         </div>
       )}
       <div className="topbar">
@@ -1314,7 +1420,42 @@ function TerminalView({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    // http(s) links — route through the OS default handler so they land in
+    // the user's browser instead of the WKWebView's blocked window.open.
+    term.loadAddon(new WebLinksAddon((_e, uri) => {
+      invoke("open_path", { path: uri }).catch(() => {});
+    }));
+    // File / folder paths — absolute (`/...`) or home (`~/...`). Clicking
+    // opens the path with the OS default app: Finder for directories,
+    // associated app for files.
+    const PATH_RE = /(?:^|[\s"'`()[\]{}<>])((?:~\/|\/)[^\s"'`()[\]{}<>]+)/g;
+    term.registerLinkProvider({
+      provideLinks(y, callback) {
+        const line = term.buffer.active.getLine(y - 1);
+        if (!line) return callback(undefined);
+        const text = line.translateToString(true);
+        const links: any[] = [];
+        PATH_RE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = PATH_RE.exec(text))) {
+          // Trim trailing punctuation that's typically not part of the path.
+          let p = m[1].replace(/[.,;:!?)\]}>]+$/, "");
+          if (p.length < 2) continue;
+          const start = m.index + m[0].length - m[1].length;
+          links.push({
+            range: {
+              start: { x: start + 1, y },
+              end:   { x: start + p.length, y },
+            },
+            text: p,
+            activate(_e: MouseEvent, path: string) {
+              invoke("open_path", { path }).catch(() => {});
+            },
+          });
+        }
+        callback(links);
+      },
+    });
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     // Swallow OSC 777 (Claude Code remote-control "warp://cli-agent;{...}"

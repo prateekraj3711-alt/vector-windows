@@ -6,7 +6,8 @@ mod sessions;
 
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AppState {
     registry: Arc<pty::PtyRegistry>,
@@ -166,6 +167,31 @@ async fn supported_resume_agents() -> Result<Vec<String>, String> {
     Ok(vec!["claude".into()])
 }
 
+/// Open a URL, file, or folder with the OS default handler. Expands a
+/// leading `~/` or bare `~` against `$HOME` first so paths lifted out of
+/// shell output work without manual expansion.
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    let target: String = if path == "~" {
+        dirs::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or(path)
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(rest).to_string_lossy().into_owned())
+            .unwrap_or(path)
+    } else {
+        path
+    };
+
+    #[cfg(target_os = "macos")]
+    let spawn = std::process::Command::new("/usr/bin/open").arg(&target).spawn();
+    #[cfg(target_os = "linux")]
+    let spawn = std::process::Command::new("xdg-open").arg(&target).spawn();
+    #[cfg(target_os = "windows")]
+    let spawn = std::process::Command::new("cmd").args(["/C", "start", "", &target]).spawn();
+
+    spawn.map(|_| ()).map_err(|e| e.to_string())
+}
+
 
 fn main() {
     tauri::Builder::default()
@@ -180,10 +206,58 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
-            list_sessions, search_sessions, get_session, supported_resume_agents
+            list_sessions, search_sessions, get_session, supported_resume_agents, open_path
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");
+
+            // Native menu bar. Replacing the default menu loses macOS's built-in
+            // items, so we rebuild App / Edit / View / Window / Help explicitly.
+            let about_meta = AboutMetadataBuilder::new()
+                .name(Some("Vector"))
+                .version(Some(env!("CARGO_PKG_VERSION")))
+                .build();
+            let app_menu = SubmenuBuilder::new(app, "Vector")
+                .about(Some(about_meta))
+                .separator()
+                .services()
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+            let edit_menu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+            let window_menu = SubmenuBuilder::new(app, "Window")
+                .minimize()
+                .maximize()
+                .separator()
+                .close_window()
+                .build()?;
+            let check_updates = MenuItemBuilder::new("Check for Updates…")
+                .id("check_updates")
+                .build(app)?;
+            let help_menu = SubmenuBuilder::new(app, "Help")
+                .item(&check_updates)
+                .build()?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&app_menu, &edit_menu, &window_menu, &help_menu])
+                .build()?;
+            app.set_menu(menu)?;
+            app.on_menu_event(|handle, event| {
+                if event.id() == "check_updates" {
+                    let _ = handle.emit("menu://check-updates", ());
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
