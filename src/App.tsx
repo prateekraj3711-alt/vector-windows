@@ -1358,20 +1358,6 @@ function TerminalView({
         term.writeln(`\r\n\x1b[31m[failed to start agent: ${err}]\x1b[0m`);
       }
       if (visible && focused) term.focus();
-      // Post-start nudge: some agents (e.g. Claude Code) draw their welcome
-      // banner once at launch and never redraw unless SIGWINCH changes size.
-      // Send cols-1 then cols back so a redraw is triggered.
-      window.setTimeout(async () => {
-        if (disposed) return;
-        const c = term.cols, r = term.rows;
-        if (c > 20 && r > 5) {
-          try { await invoke("resize_pty", { sessionId, cols: c - 1, rows: r }); } catch {}
-          window.setTimeout(() => {
-            if (disposed) return;
-            invoke("resize_pty", { sessionId, cols: c, rows: r }).catch(() => {});
-          }, 40);
-        }
-      }, 450);
     };
 
     const poll = () => {

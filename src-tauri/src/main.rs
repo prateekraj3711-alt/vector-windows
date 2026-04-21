@@ -101,6 +101,13 @@ async fn start_session(
     // (git, node, etc.) can be found.
     let path = config::augmented_path();
     env.push(("PATH".into(), path.to_string_lossy().to_string()));
+    // Set TERM so TUIs (Claude Code, etc.) agree with xterm.js on capabilities.
+    if !env.iter().any(|(k, _)| k == "TERM") {
+        env.push(("TERM".into(), "xterm-256color".into()));
+    }
+    if !env.iter().any(|(k, _)| k == "COLORTERM") {
+        env.push(("COLORTERM".into(), "truecolor".into()));
+    }
 
     let cwd = cwd
         .map(std::path::PathBuf::from)

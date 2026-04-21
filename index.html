@@ -165,7 +165,10 @@
       .msg--assistant .msg-text { color: color-mix(in srgb, var(--fg) 85%, var(--muted) 15%); }
       .session-muted { color: var(--muted); padding: 10px 12px; font-size: 12px; }
 
-      .update-banner { flex: 0 0 auto; display: flex; flex-direction: column; padding: 8px 14px; background: linear-gradient(90deg, rgba(255,138,76,0.18), rgba(255,138,76,0.08)); border-bottom: 1px solid rgba(255,138,76,0.35); color: var(--fg); font-size: 12px; }
+      .update-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; flex-direction: column; padding: 8px 14px; background: linear-gradient(90deg, rgba(255,138,76,0.92), rgba(255,138,76,0.82)); border-bottom: 1px solid rgba(255,138,76,0.55); color: #1a1a0f; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); }
+      .update-banner .update-btn { background: #1a1a0f; color: #fff5e8; }
+      .update-banner .icon-btn { color: #1a1a0f; border-color: rgba(0,0,0,0.25); }
+      .update-banner .update-notes > summary { color: #1a1a0f; font-weight: 600; }
       .update-row { display: flex; align-items: center; gap: 10px; }
       .update-notes { font-size: 12px; }
       .update-notes > summary { cursor: pointer; color: #ff8a4c; list-style: none; user-select: none; }
