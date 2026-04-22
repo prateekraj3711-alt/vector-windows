@@ -659,6 +659,21 @@ export default function App() {
   }, [activeId]);
 
   useEffect(() => {
+    const clearActive = () => {
+      const id = activeIdRef.current;
+      if (!id) return;
+      setBellTabs((b) => { if (!b.has(id)) return b; const n = new Set(b); n.delete(id); return n; });
+    };
+    window.addEventListener("focus", clearActive);
+    const onVis = () => { if (document.visibilityState === "visible") clearActive(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", clearActive);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
+  useEffect(() => {
     invoke("set_badge_count", { count: bellTabs.size }).catch(() => {});
   }, [bellTabs]);
 
@@ -991,13 +1006,15 @@ export default function App() {
           <div className="picker-card usage-card" onClick={(e) => e.stopPropagation()}>
             <div className="picker-head">
               <div className="picker-brand"><VectorMark size={14} /> Claude usage</div>
-              <button
-                className="icon-btn"
-                onClick={() => { invoke<ClaudeUsage | null>("get_claude_usage").then((u) => { if (u) setClaudeUsage(u); }).catch(() => {}); }}
-                aria-label="Refresh"
-                title="Refresh"
-              >↻</button>
-              <button className="icon-btn" onClick={() => setUsageOpen(false)} aria-label="Close">×</button>
+              <div className="usage-head-actions">
+                <button
+                  className="icon-btn"
+                  onClick={() => { invoke<ClaudeUsage | null>("get_claude_usage").then((u) => { if (u) setClaudeUsage(u); }).catch(() => {}); }}
+                  aria-label="Refresh"
+                  title="Refresh"
+                >↻</button>
+                <button className="icon-btn" onClick={() => setUsageOpen(false)} aria-label="Close">×</button>
+              </div>
             </div>
             <div className="usage-body">
               {[
