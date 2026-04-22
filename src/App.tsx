@@ -100,7 +100,7 @@ type PaneSplit = {
   ratio: number;
 };
 type PaneNode = PaneLeaf | PaneSplit;
-type Tab = { id: string; root: PaneNode; activePaneId: string };
+type Tab = { id: string; root: PaneNode; activePaneId: string; userTitle?: string };
 
 // --- pane-tree helpers ---
 function findLeaf(node: PaneNode, id: string): PaneLeaf | null {
@@ -207,7 +207,8 @@ function findAdjacentPane(root: PaneNode, activeId: string, dir: "ArrowLeft" | "
   return best?.id ?? null;
 }
 function migrateTab(raw: any): Tab {
-  if (raw && raw.root) return raw as Tab;
+  const userTitle = typeof raw?.userTitle === "string" && raw.userTitle.trim() ? raw.userTitle.trim() : undefined;
+  if (raw && raw.root) return { ...(raw as Tab), userTitle };
   // Old flat shape → single-leaf tree.
   const paneId = crypto.randomUUID();
   const leaf: PaneLeaf = {
@@ -219,10 +220,10 @@ function migrateTab(raw: any): Tab {
     continueLatest: raw?.continueLatest,
     epoch: raw?.epoch ?? 0,
   };
-  return { id: raw?.id ?? crypto.randomUUID(), root: leaf, activePaneId: paneId };
+  return { id: raw?.id ?? crypto.randomUUID(), root: leaf, activePaneId: paneId, userTitle };
 }
-type SessionSummary = { id: string; agentId: string; title: string; modifiedMs: number; messageCount: number };
-type PreviewMessage = { role: string; kind: "text" | "system"; label?: string; text: string };
+type SessionSummary = { id: string; agentId: string; title: string; modifiedMs: number; messageCount: number; hasRecap?: boolean };
+type PreviewMessage = { role: string; kind: "text" | "system" | "recap"; label?: string; text: string };
 type SessionDetail = { id: string; agentId: string; title: string; modifiedMs: number; messages: PreviewMessage[] };
 type Theme = "dark" | "light";
 type Orientation = "horizontal" | "vertical";
@@ -368,6 +369,33 @@ export default function App() {
   const dndRef = useRef<DndPayload | null>(null);
   const getDnd = useCallback(() => dndRef.current, []);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [tabDropIndex, setTabDropIndex] = useState<number | null>(null);
+  type UsageBucket = { utilization: number; resetsAt?: string | null };
+  type ClaudeUsage = { fiveHour?: UsageBucket | null; sevenDay?: UsageBucket | null; sevenDaySonnet?: UsageBucket | null; sevenDayOpus?: UsageBucket | null };
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const leafStartedMs = useRef<Record<string, number>>({});
+  const markLeafStarted = useCallback((leafId: string, epoch: number) => {
+    leafStartedMs.current[`${leafId}:${epoch}`] = Date.now();
+  }, []);
+
+  const renameTab = useCallback((tabId: string, nextTitle: string | undefined) => {
+    const trimmed = nextTitle?.trim();
+    setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, userTitle: trimmed && trimmed.length > 0 ? trimmed : undefined } : t)));
+  }, []);
+  const startRename = useCallback((tab: Tab) => {
+    setRenamingTabId(tab.id);
+    setRenameDraft(tab.userTitle ?? "");
+  }, []);
+  const commitRename = useCallback(() => {
+    if (!renamingTabId) return;
+    renameTab(renamingTabId, renameDraft);
+    setRenamingTabId(null);
+    setRenameDraft("");
+  }, [renamingTabId, renameDraft, renameTab]);
+  const cancelRename = useCallback(() => { setRenamingTabId(null); setRenameDraft(""); }, []);
 
   const movePaneToNewTab = useCallback((fromTabId: string, paneId: string) => {
     setTabs((prev) => {
@@ -630,6 +658,10 @@ export default function App() {
     setBellTabs((b) => { if (!b.has(activeId)) return b; const n = new Set(b); n.delete(activeId); return n; });
   }, [activeId]);
 
+  useEffect(() => {
+    invoke("set_badge_count", { count: bellTabs.size }).catch(() => {});
+  }, [bellTabs]);
+
   const onBell = useCallback((tabId: string, paneId: string) => {
     const windowFocused = document.hasFocus();
     const isActive = tabId === activeId;
@@ -692,20 +724,111 @@ export default function App() {
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
   const xtermTheme = theme === "light" ? lightTheme : darkTheme;
 
+  const ctxAgentId = activeLeaf?.agentId ?? "";
+  useEffect(() => {
+    if (ctxAgentId !== "claude") { setClaudeUsage(null); return; }
+    let cancelled = false;
+    let intervalId: number | null = null;
+    let retryId: number | null = null;
+    let retryDelay = 15_000;   // first cold-start retry after 15s
+    const MAX_RETRY = 120_000; // cap at 2min between retries
+    let haveData = false;
+
+    const tick = () => {
+      invoke<ClaudeUsage | null>("get_claude_usage")
+        .then((u) => {
+          if (cancelled) return;
+          if (u) {
+            setClaudeUsage(u);
+            haveData = true;
+            retryDelay = 15_000;
+            // First success → switch from backoff to steady 5-min cadence.
+            if (intervalId == null) {
+              intervalId = window.setInterval(tick, 300_000);
+            }
+          } else if (!haveData) {
+            // Still no data — keep retrying with backoff until we get some.
+            retryId = window.setTimeout(tick, retryDelay);
+            retryDelay = Math.min(MAX_RETRY, retryDelay * 2);
+          }
+          // If we have data and this tick failed, keep cached value silently.
+        })
+        .catch(() => {
+          if (cancelled || haveData) return;
+          retryId = window.setTimeout(tick, retryDelay);
+          retryDelay = Math.min(MAX_RETRY, retryDelay * 2);
+        });
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (intervalId != null) window.clearInterval(intervalId);
+      if (retryId != null) window.clearTimeout(retryId);
+    };
+  }, [ctxAgentId]);
+  const fiveHour = claudeUsage?.fiveHour ?? null;
+  const ctxPct = fiveHour ? Math.round(Math.min(100, Math.max(0, fiveHour.utilization))) : 0;
+  const ctxLevel = ctxPct >= 85 ? "crit" : ctxPct >= 60 ? "warn" : "ok";
+  const formatResetTime = (iso?: string | null): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const hm = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (sameDay) return hm;
+    const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    return `${md} ${hm}`;
+  };
+  const ctxResetText = formatResetTime(fiveHour?.resetsAt);
+
+  const computeTabDropIndex = (container: HTMLElement, clientX: number): number => {
+    const tabEls = Array.from(container.querySelectorAll<HTMLElement>(".tabs > .tab"));
+    for (let k = 0; k < tabEls.length; k++) {
+      const r = tabEls[k].getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) return k;
+    }
+    return tabEls.length;
+  };
   const tabBar = (
     <div
       className="tabs-container"
       onDragOver={(e) => {
-        if (dndRef.current?.kind !== "pane") return;
+        const d = dndRef.current;
+        if (!d) return;
+        // Always allow drops in the strip; keeps the cursor as "move" and
+        // prevents the webview's default green-"+" / forbidden indicator.
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
+        if (d.kind === "tab") {
+          const idx = computeTabDropIndex(e.currentTarget as HTMLElement, e.clientX);
+          if (idx !== tabDropIndex) setTabDropIndex(idx);
+        }
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the cursor actually leaves the strip (not when it
+        // crosses a child boundary).
+        const target = e.currentTarget as HTMLElement;
+        const related = e.relatedTarget as Node | null;
+        if (!related || !target.contains(related)) setTabDropIndex(null);
       }}
       onDrop={(e) => {
         const d = dndRef.current;
-        if (d?.kind !== "pane") return;
+        if (!d) return;
         e.preventDefault();
+        if (d.kind === "pane") {
+          dndRef.current = null;
+          setTabDropIndex(null);
+          movePaneToNewTab(d.fromTabId, d.paneId);
+          return;
+        }
+        // tab kind
+        const from = dragFromRef.current;
+        const to = computeTabDropIndex(e.currentTarget as HTMLElement, e.clientX);
+        dragFromRef.current = null;
         dndRef.current = null;
-        movePaneToNewTab(d.fromTabId, d.paneId);
+        setTabDropIndex(null);
+        if (from != null) moveTab(from, to);
       }}
     >
       <div className="tabs">
@@ -719,17 +842,22 @@ export default function App() {
           const stripped = rawTitle
             .replace(new RegExp(`^\\s*${agentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[–—\\-:·|·]?\\s*`, "i"), "")
             .trim();
-          const title = stripped || basename(tabCwd);
+          const title = t.userTitle || stripped || basename(tabCwd);
+          const isRenaming = renamingTabId === t.id;
           const classes = ["tab"];
           if (t.id === activeId) classes.push("active");
           if (bellTabs.has(t.id)) classes.push("bell");
+          if (tabDropIndex !== null && dndRef.current?.kind === "tab") {
+            if (tabDropIndex === i) classes.push("drop-before");
+            if (tabDropIndex === tabs.length && i === tabs.length - 1) classes.push("drop-after");
+          }
           return (
             <div
               key={t.id}
               className={classes.join(" ")}
               onClick={() => setActiveId(t.id)}
               title={`⌘${i + 1} · ${agentLabel} · ${tabCwd}`}
-              draggable
+              draggable={!isRenaming}
               onDragStart={(e) => {
                 dragFromRef.current = i;
                 dndRef.current = { kind: "tab", tabId: t.id };
@@ -737,17 +865,35 @@ export default function App() {
                 e.dataTransfer.effectAllowed = "move";
                 try { e.dataTransfer.setData("text/plain", String(i)); } catch {}
               }}
-              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const from = dragFromRef.current;
+              onDragEnd={() => {
                 dragFromRef.current = null;
-                if (from != null) moveTab(from, i);
+                dndRef.current = null;
+                setTabDropIndex(null);
               }}
-              onDragEnd={() => { dragFromRef.current = null; dndRef.current = null; }}
             >
               <span className="agent-chip"><AgentIcon id={tabAgentId} size={14} /></span>
-              <span className="tab-label">{title}</span>
+              {isRenaming ? (
+                <input
+                  className="tab-rename"
+                  value={renameDraft}
+                  autoFocus
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                    else if (e.key === "Escape") { e.preventDefault(); cancelRename(); }
+                  }}
+                  onBlur={commitRename}
+                  placeholder={stripped || basename(tabCwd) || "Tab name"}
+                />
+              ) : (
+                <span
+                  className="tab-label"
+                  onDoubleClick={(e) => { e.stopPropagation(); startRename(t); }}
+                  title="Double-click to rename"
+                >{title}</span>
+              )}
               {(() => { const n = allLeafIds(t.root).length; return n > 1 ? <span className="tab-pane-count">{n}</span> : null; })()}
               <span className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>
             </div>
@@ -840,6 +986,46 @@ export default function App() {
           </div>
         </div>
       )}
+      {usageOpen && (
+        <div className="picker-overlay" onClick={() => setUsageOpen(false)}>
+          <div className="picker-card usage-card" onClick={(e) => e.stopPropagation()}>
+            <div className="picker-head">
+              <div className="picker-brand"><VectorMark size={14} /> Claude usage</div>
+              <button
+                className="icon-btn"
+                onClick={() => { invoke<ClaudeUsage | null>("get_claude_usage").then((u) => { if (u) setClaudeUsage(u); }).catch(() => {}); }}
+                aria-label="Refresh"
+                title="Refresh"
+              >↻</button>
+              <button className="icon-btn" onClick={() => setUsageOpen(false)} aria-label="Close">×</button>
+            </div>
+            <div className="usage-body">
+              {[
+                { label: "Current session", bucket: claudeUsage?.fiveHour },
+                { label: "Current week (all models)", bucket: claudeUsage?.sevenDay },
+                { label: "Current week (Sonnet only)", bucket: claudeUsage?.sevenDaySonnet },
+                { label: "Current week (Opus only)", bucket: claudeUsage?.sevenDayOpus },
+              ].map(({ label, bucket }) =>
+                bucket ? (
+                  <div key={label} className="usage-row">
+                    <div className="usage-row-head">
+                      <span className="usage-row-label">{label}</span>
+                      <span className="usage-row-num">{Math.round(bucket.utilization)}% used</span>
+                    </div>
+                    <div className={`usage-bar ctx-${bucket.utilization >= 85 ? "crit" : bucket.utilization >= 60 ? "warn" : "ok"}`}>
+                      <div className="usage-fill" style={{ width: `${Math.min(100, Math.max(0, bucket.utilization))}%` }} />
+                    </div>
+                    <div className="usage-row-reset">
+                      {bucket.resetsAt ? `Resets ${formatResetTime(bucket.resetsAt)}` : "No reset scheduled"}
+                    </div>
+                  </div>
+                ) : null
+              )}
+              {!claudeUsage && <div className="session-muted">Loading usage…</div>}
+            </div>
+          </div>
+        </div>
+      )}
       {updateCheck && !update && (
         <div className="update-toast" role="status">
           {updateCheck === "checking" && "Checking for updates…"}
@@ -865,6 +1051,18 @@ export default function App() {
         </select>
         <button className="icon-btn" onClick={reloadActive} title="Reload agent (⌘⇧R)" disabled={!activeTab}>↻</button>
         <div className="spacer" />
+        {fiveHour && (
+          <button
+            className={`ctx-meter ctx-${ctxLevel}`}
+            onClick={() => setUsageOpen(true)}
+            aria-label="Claude usage"
+          >
+            <span className="ctx-label">Session</span>
+            <div className="ctx-bar"><div className="ctx-fill" style={{ width: `${ctxPct}%` }} /></div>
+            <span className="ctx-num">{ctxPct}%</span>
+            {ctxResetText && <span className="ctx-reset">· resets {ctxResetText}</span>}
+          </button>
+        )}
         <div className="settings">
           <button className="icon-btn" onClick={() => { setShortcutsOpen((o) => !o); setSettingsOpen(false); }} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
             <KeyboardIcon />
@@ -909,6 +1107,15 @@ export default function App() {
           )}
         </div>
       </div>
+      {fiveHour && ctxPct >= 60 && (
+        <div className={`ctx-banner${ctxLevel === "crit" ? " crit" : ""}`}>
+          <span>
+            {ctxLevel === "crit"
+              ? `5h session limit nearly full (${ctxPct}% used)${ctxResetText ? ` — resets ${ctxResetText}` : ""}.`
+              : `Approaching 5h session limit (${ctxPct}% used)${ctxResetText ? ` — resets ${ctxResetText}` : ""}.`}
+          </span>
+        </div>
+      )}
       <div className={`shell ${orientation}`}>
         {tabs.length > 0 && tabBar}
         <div className="terms">
@@ -930,6 +1137,7 @@ export default function App() {
                 onPaneDrop={(targetPid, edge) => onPaneDrop(t.id, targetPid, edge)}
                 getDndKind={() => dndRef.current?.kind ?? null}
                 getDndPaneId={() => dndRef.current?.kind === "pane" ? dndRef.current.paneId : null}
+                onSessionStart={markLeafStarted}
               />
             </div>
           ))}
@@ -1152,7 +1360,10 @@ function PickerModal({
                     onDoubleClick={() => project && onPick(project, agentId, s.id)}
                     title={s.title}
                   >
-                    <div className="session-title">{s.title || "(untitled)"}</div>
+                    <div className="session-title">
+                      {s.title || "(untitled)"}
+                      {s.hasRecap && <span className="session-badge" title="Contains a compaction recap">recap</span>}
+                    </div>
                     <div className="session-meta">
                       <span title={new Date(s.modifiedMs).toLocaleString()}>{relativeTime(s.modifiedMs)}</span>
                       {s.messageCount > 0 && <span>· {s.messageCount} messages</span>}
@@ -1174,7 +1385,13 @@ function PickerModal({
                   <div className="session-preview-meta">{relativeTime(preview.modifiedMs)} · {preview.messages.length} messages</div>
                 </div>
                 <div className="session-preview-body" ref={previewBodyRef}>
-                  {preview.messages.slice(-30).map((m, i) =>
+                  {preview.messages.filter((m) => m.kind === "recap").map((m, i, arr) => (
+                    <details key={`recap-${i}`} className="msg msg--recap" open={i === arr.length - 1}>
+                      <summary>Recap from previous context {arr.length > 1 ? `(${i + 1}/${arr.length})` : ""}</summary>
+                      <div className="msg-text">{m.text}</div>
+                    </details>
+                  ))}
+                  {preview.messages.filter((m) => m.kind !== "recap").slice(-30).map((m, i) =>
                     m.kind === "system" ? (
                       <div key={i} className="msg msg--sys"><span>system: {m.label}</span></div>
                     ) : (
@@ -1215,6 +1432,7 @@ type PaneViewProps = {
   onPaneDrop: (targetPaneId: string, edge: "left" | "right" | "top" | "bottom") => void;
   getDndKind: () => "pane" | "tab" | null;
   getDndPaneId: () => string | null;
+  onSessionStart?: (leafId: string, epoch: number) => void;
 };
 
 function flattenLeaves(node: PaneNode): PaneLeaf[] {
@@ -1244,7 +1462,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -1317,12 +1535,14 @@ function PaneView(props: PaneViewProps) {
               cwd={leaf.cwd}
               resumeId={leaf.resumeId}
               continueLatest={leaf.continueLatest}
+              epoch={leaf.epoch}
               visible={tabVisible}
               focused={isActive}
               theme={theme}
               onBell={onBell}
               onTitle={onTitle}
               onExit={() => onExitPane(leaf.id)}
+              onSessionStart={onSessionStart}
             />
             {showClose && (
               <button
@@ -1381,12 +1601,14 @@ function TerminalView({
   cwd,
   resumeId,
   continueLatest,
+  epoch,
   visible,
   focused,
   theme,
   onBell,
   onTitle,
   onExit,
+  onSessionStart,
 }: {
   tabId: string;
   paneId: string;
@@ -1394,12 +1616,14 @@ function TerminalView({
   cwd: string;
   resumeId?: string;
   continueLatest?: boolean;
+  epoch: number;
   visible: boolean;
   focused: boolean;
   theme: ITheme;
   onBell: (tabId: string, paneId: string) => void;
   onTitle: (tabId: string, title: string) => void;
   onExit: () => void;
+  onSessionStart?: (leafId: string, epoch: number) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -1511,6 +1735,7 @@ function TerminalView({
 
     let unlistenData: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    let unlistenNotify: UnlistenFn | null = null;
     let disposed = false;
     let started = false;
     let fontsReady = false;
@@ -1518,6 +1743,7 @@ function TerminalView({
 
     const doStart = async () => {
       started = true;
+      try { onSessionStart?.(paneId, epoch); } catch {}
       try { fit.fit(); } catch {}
       const cols = term.cols || 100;
       const rows = term.rows || 30;
@@ -1553,6 +1779,12 @@ function TerminalView({
       unlistenData = await listen<string>(`pty-data-${sessionId}`, (e) => term.write(e.payload));
       unlistenExit = await listen<number>(`pty-exit-${sessionId}`, () => {
         onExit();
+      });
+      // Claude Code emits OSC 777 warp://cli-agent notifies for permission
+      // prompts and idle-wait states. pty.rs strips them and forwards a count
+      // here; route to the same bell path so the tab lights up + Dock badges.
+      unlistenNotify = await listen<number>(`pty-notify-${sessionId}`, () => {
+        onBell(tabId, paneId);
       });
 
       term.onData((data) => { invoke("write_stdin", { sessionId, data }).catch(() => {}); });
@@ -1597,6 +1829,7 @@ function TerminalView({
       document.removeEventListener("keydown", onDocKey, true);
       unlistenData?.();
       unlistenExit?.();
+      unlistenNotify?.();
       if (sessionRef.current) invoke("kill_session", { sessionId: sessionRef.current }).catch(() => {});
       term.dispose();
       termRef.current = null;

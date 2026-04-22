@@ -3,6 +3,7 @@
 mod config;
 mod pty;
 mod sessions;
+mod usage;
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -109,6 +110,15 @@ async fn start_session(
     if !env.iter().any(|(k, _)| k == "COLORTERM") {
         env.push(("COLORTERM".into(), "truecolor".into()));
     }
+    // Advertise as iTerm so Claude Code (and any other TUI that branches on
+    // terminal capability) picks the OSC 9 notification channel. pty.rs strips
+    // + forwards those notifies as pty-notify events.
+    if !env.iter().any(|(k, _)| k == "TERM_PROGRAM") {
+        env.push(("TERM_PROGRAM".into(), "iTerm.app".into()));
+    }
+    if !env.iter().any(|(k, _)| k == "TERM_PROGRAM_VERSION") {
+        env.push(("TERM_PROGRAM_VERSION".into(), "3.6.6".into()));
+    }
 
     let cwd = cwd
         .map(std::path::PathBuf::from)
@@ -167,6 +177,21 @@ async fn supported_resume_agents() -> Result<Vec<String>, String> {
     Ok(vec!["claude".into()])
 }
 
+#[tauri::command]
+async fn get_claude_usage() -> Result<Option<usage::ClaudeUsage>, String> {
+    usage::fetch_claude_usage().await
+}
+
+/// Set the macOS Dock badge. 0 clears it. No-op on other platforms.
+#[tauri::command]
+async fn set_badge_count(app: AppHandle, count: u32) -> Result<(), String> {
+    let value = if count == 0 { None } else { Some(count as i64) };
+    if let Some(win) = app.get_webview_window("main") {
+        win.set_badge_count(value).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Open a URL, file, or folder with the OS default handler. Expands a
 /// leading `~/` or bare `~` against `$HOME` first so paths lifted out of
 /// shell output work without manual expansion.
@@ -206,7 +231,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
-            list_sessions, search_sessions, get_session, supported_resume_agents, open_path
+            list_sessions, search_sessions, get_session, supported_resume_agents, open_path,
+            set_badge_count, get_claude_usage
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");

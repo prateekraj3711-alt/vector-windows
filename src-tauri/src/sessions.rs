@@ -6,7 +6,26 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone)]
-struct CachedInfo { title: String, msg_count: u32 }
+struct CachedInfo { title: String, msg_count: u32, has_recap: bool }
+
+// Claude Code writes this as the first line of a resumed/auto-compacted session's
+// first user message. No dedicated type — we detect by prefix.
+const RECAP_PREFIX: &str = "This session is being continued from a previous conversation";
+
+fn strip_recap_prefix(text: &str) -> &str {
+    let t = text.trim_start();
+    if !t.starts_with(RECAP_PREFIX) { return text; }
+    // Drop the boilerplate line(s) and any "Summary:" header.
+    if let Some(idx) = t.find("Summary:") {
+        let rest = &t[idx + "Summary:".len()..];
+        return rest.trim_start_matches(|c: char| c == '\n' || c.is_whitespace());
+    }
+    // No explicit "Summary:" header — return text after the first blank line.
+    if let Some(idx) = t.find("\n\n") {
+        return &t[idx + 2..];
+    }
+    t
+}
 
 static INFO_CACHE: OnceLock<Mutex<HashMap<(PathBuf, u64), CachedInfo>>> = OnceLock::new();
 fn info_cache() -> &'static Mutex<HashMap<(PathBuf, u64), CachedInfo>> {
@@ -28,15 +47,16 @@ fn store_info(path: &Path, modified_ms: u64, info: CachedInfo) {
 //   2. agent-name line (named agents) — last occurrence wins
 //   3. first non-system user message text
 fn scan_file_summary(path: &Path) -> CachedInfo {
-    let Ok(file) = File::open(path) else { return CachedInfo { title: String::new(), msg_count: 0 } };
+    let Ok(file) = File::open(path) else { return CachedInfo { title: String::new(), msg_count: 0, has_recap: false } };
     let mut raw: Vec<u8> = Vec::new();
     let _ = file.take(4 * 1024 * 1024).read_to_end(&mut raw);
 
-    let text = match std::str::from_utf8(&raw) { Ok(s) => s, Err(_) => return CachedInfo { title: String::new(), msg_count: 0 } };
+    let text = match std::str::from_utf8(&raw) { Ok(s) => s, Err(_) => return CachedInfo { title: String::new(), msg_count: 0, has_recap: false } };
     let mut custom_title = String::new();
     let mut agent_name = String::new();
     let mut first_user_title = String::new();
     let mut msg_count: u32 = 0;
+    let mut has_recap = false;
     for line in text.lines() {
         if line.trim().is_empty() { continue; }
 
@@ -62,10 +82,15 @@ fn scan_file_summary(path: &Path) -> CachedInfo {
         let is_msg = line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"");
         if !is_msg { continue; }
         msg_count += 1;
-        if first_user_title.is_empty() && line.contains("\"type\":\"user\"") {
+        if line.contains("\"type\":\"user\"") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 if let Some(t) = extract_text(v.get("message")) {
-                    if classify_system(&t).is_none() { first_user_title = truncate(&t, 80); }
+                    if !has_recap && t.trim_start().starts_with(RECAP_PREFIX) { has_recap = true; }
+                    if first_user_title.is_empty() && classify_system(&t).is_none() {
+                        // Don't let the recap boilerplate become the title.
+                        let candidate = if t.trim_start().starts_with(RECAP_PREFIX) { strip_recap_prefix(&t) } else { &t };
+                        if !candidate.trim().is_empty() { first_user_title = truncate(candidate, 80); }
+                    }
                 }
             }
         }
@@ -74,7 +99,7 @@ fn scan_file_summary(path: &Path) -> CachedInfo {
     let title = if !custom_title.is_empty() { custom_title }
         else if !agent_name.is_empty() { agent_name }
         else { first_user_title };
-    CachedInfo { title, msg_count }
+    CachedInfo { title, msg_count, has_recap }
 }
 
 #[derive(Serialize, Clone)]
@@ -85,6 +110,7 @@ pub struct SessionSummary {
     pub title: String,
     pub modified_ms: u64,
     pub message_count: u32,
+    pub has_recap: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -114,6 +140,7 @@ fn claude_sessions_dir(cwd: &Path) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     Some(home.join(".claude").join("projects").join(encode_path_for_claude(cwd)))
 }
+
 
 fn file_modified_ms(path: &Path) -> u64 {
     fs::metadata(path)
@@ -207,7 +234,7 @@ pub fn list_claude_sessions(cwd: &Path) -> Vec<SessionSummary> {
                     info
                 });
                 if info.title.is_empty() { return None; }
-                Some(SessionSummary { id, agent_id: "claude".into(), title: info.title, modified_ms, message_count: info.msg_count })
+                Some(SessionSummary { id, agent_id: "claude".into(), title: info.title, modified_ms, message_count: info.msg_count, has_recap: info.has_recap })
             })
         })
         .collect();
@@ -243,7 +270,7 @@ pub fn search_claude_sessions(cwd: &Path, query: &str) -> Vec<SessionSummary> {
     let handles: Vec<_> = paths.into_iter().map(|(id, path, modified_ms, _size)| {
         let needle = needle.clone();
         std::thread::spawn(move || scan_for_needle(&path, &needle, modified_ms).map(|info| {
-            SessionSummary { id, agent_id: "claude".into(), title: info.title, modified_ms, message_count: info.msg_count }
+            SessionSummary { id, agent_id: "claude".into(), title: info.title, modified_ms, message_count: info.msg_count, has_recap: info.has_recap }
         }))
     }).collect();
 
@@ -299,22 +326,32 @@ pub fn get_claude_session(cwd: &Path, session_id: &str) -> Option<SessionDetail>
         if t == "user" || t == "assistant" {
             if let Some(text) = extract_text(v.get("message")) {
                 let sys = classify_system(&text);
-                if first_user_title.is_empty() && t == "user" && sys.is_none() {
+                let is_recap = t == "user" && text.trim_start().starts_with(RECAP_PREFIX);
+                if first_user_title.is_empty() && t == "user" && sys.is_none() && !is_recap {
                     first_user_title = truncate(&text, 80);
                 }
-                messages.push(match sys {
-                    Some(label) => PreviewMessage {
+                messages.push(if is_recap {
+                    PreviewMessage {
                         role: t.to_string(),
-                        kind: "system".into(),
-                        label: Some(label.to_string()),
-                        text: String::new(),
-                    },
-                    None => PreviewMessage {
-                        role: t.to_string(),
-                        kind: "text".into(),
-                        label: None,
-                        text: truncate(&text, 1200),
-                    },
+                        kind: "recap".into(),
+                        label: Some("recap".into()),
+                        text: truncate(strip_recap_prefix(&text), 4000),
+                    }
+                } else {
+                    match sys {
+                        Some(label) => PreviewMessage {
+                            role: t.to_string(),
+                            kind: "system".into(),
+                            label: Some(label.to_string()),
+                            text: String::new(),
+                        },
+                        None => PreviewMessage {
+                            role: t.to_string(),
+                            kind: "text".into(),
+                            label: None,
+                            text: truncate(&text, 1200),
+                        },
+                    }
                 });
             }
         }

@@ -33,10 +33,15 @@ const MAX_EMIT_BYTES: usize = 128 * 1024;
 ///      diff-redraws.
 ///
 /// Both classes are handled across PTY read boundaries via `carry`.
-pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) -> Vec<u8> {
+/// Returns `(filtered_bytes, osc_777_count)`. `osc_777_count` is the number
+/// of OSC 777 `warp://cli-agent;{JSON}` payloads seen in this chunk — the
+/// PTY loop uses it to emit a `pty-notify-{sid}` event for permission /
+/// attention signals coming from Claude Code.
+pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) -> (Vec<u8>, u32) {
     carry.extend_from_slice(chunk);
     let bytes = std::mem::take(carry);
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut osc_777: u32 = 0;
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != 0x1b {
@@ -47,7 +52,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
         // At ESC — need enough lookahead to classify.
         if i + 1 >= bytes.len() {
             carry.extend_from_slice(&bytes[i..]);
-            return out;
+            return (out, osc_777);
         }
 
         // CSI sequences: ESC [ ... final-byte. Drop ESC[?2026h / ESC[?2026l.
@@ -64,7 +69,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
             if j >= bytes.len() {
                 // Incomplete CSI at end of chunk — carry it.
                 carry.extend_from_slice(&bytes[i..]);
-                return out;
+                return (out, osc_777);
             }
             let e = j + 1;
             let seq = &bytes[i..e];
@@ -104,7 +109,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
             match end {
                 None => {
                     carry.extend_from_slice(&bytes[i..]);
-                    return out;
+                    return (out, osc_777);
                 }
                 Some(e) => {
                     let is_777 = e > i + 6
@@ -112,7 +117,17 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
                         && bytes[i + 3] == b'7'
                         && bytes[i + 4] == b'7'
                         && bytes[i + 5] == b';';
-                    if !is_777 {
+                    // OSC 9 = iTerm notification. Claude Code emits this for
+                    // permission prompts and attention waits when we advertise
+                    // TERM_PROGRAM=iTerm.app. Do NOT count OSC 9;4 — that's
+                    // iTerm's progress-bar indicator, not an attention signal.
+                    let is_osc9_notify = e > i + 4
+                        && bytes[i + 2] == b'9'
+                        && bytes[i + 3] == b';'
+                        && bytes[i + 4] != b'4';
+                    if is_777 || is_osc9_notify {
+                        osc_777 += 1; // reused counter: "notify events in chunk"
+                    } else {
                         out.extend_from_slice(&bytes[i..e]);
                     }
                     i = e;
@@ -125,7 +140,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
         out.push(bytes[i]);
         i += 1;
     }
-    out
+    (out, osc_777)
 }
 
 
@@ -210,6 +225,7 @@ impl PtyRegistry {
         // PTY reads so escape sequences split at chunk boundaries are
         // reassembled before being filtered.
         let id_r = id.clone();
+        let app_r = app.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             let mut carry: Vec<u8> = Vec::new();
@@ -218,7 +234,14 @@ impl PtyRegistry {
                     Ok(0) => break,
                     Ok(n) => {
                         trace_pty(&id_r, &buf[..n]);
-                        let filtered = filter_pty_output(&mut carry, &buf[..n], aggressive_filter);
+                        let (filtered, notify_count) = filter_pty_output(&mut carry, &buf[..n], aggressive_filter);
+                        if notify_count > 0 {
+                            // Claude Code emits OSC 777 when it wants user
+                            // attention (permission prompt, idle waiting).
+                            // Forward as a structured event — the frontend
+                            // lights up the tab + dock badge.
+                            let _ = app_r.emit(&format!("pty-notify-{id_r}"), notify_count);
+                        }
                         if filtered.is_empty() { continue; }
                         if tx.send(filtered).is_err() { break; }
                     }
