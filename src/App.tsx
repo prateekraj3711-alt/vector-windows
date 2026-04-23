@@ -422,6 +422,8 @@ export default function App() {
   const getDnd = useCallback(() => dndRef.current, []);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [renamingPaneId, setRenamingPaneId] = useState<string | null>(null);
+  const [paneRenameDraft, setPaneRenameDraft] = useState("");
   const [tabDropIndex, setTabDropIndex] = useState<number | null>(null);
   const [claudeProfiles, setClaudeProfiles] = useState<ClaudeProfileDto[]>([]);
   const reloadClaudeProfiles = useCallback(async () => {
@@ -458,6 +460,17 @@ export default function App() {
     setRenameDraft("");
   }, [renamingTabId, renameDraft, renameTab]);
   const cancelRename = useCallback(() => { setRenamingTabId(null); setRenameDraft(""); }, []);
+  const commitPaneRename = useCallback(() => {
+    const pid = renamingPaneId;
+    if (!pid) return;
+    const next = paneRenameDraft.trim();
+    setTabs((prev) => prev.map((t) => ({
+      ...t,
+      root: mapLeaf(t.root, pid, (leaf) => ({ ...leaf, userTitle: next.length > 0 ? next : undefined })),
+    })));
+    setRenamingPaneId(null);
+    setPaneRenameDraft("");
+  }, [renamingPaneId, paneRenameDraft]);
 
   const movePaneToNewTab = useCallback((fromTabId: string, paneId: string) => {
     setTabs((prev) => {
@@ -982,7 +995,8 @@ export default function App() {
           const stripped = rawTitle
             .replace(new RegExp(`^\\s*${agentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[–—\\-:·|·]?\\s*`, "i"), "")
             .trim();
-          const title = t.userTitle || stripped || basename(tabCwd);
+          // tab-level rename wins; else active pane's user name; else stripped PTY title; else basename(cwd)
+          const title = t.userTitle || activeLeaf?.userTitle || stripped || basename(tabCwd);
           const isRenaming = renamingTabId === t.id;
           const classes = ["tab"];
           if (t.id === activeId) classes.push("active");
@@ -1322,6 +1336,14 @@ export default function App() {
                 getDndKind={() => dndRef.current?.kind ?? null}
                 getDndPaneId={() => dndRef.current?.kind === "pane" ? dndRef.current.paneId : null}
                 onSessionStart={markLeafStarted}
+                paneTitles={paneTitles}
+                renamingPaneId={renamingPaneId}
+                paneRenameDraft={paneRenameDraft}
+                onStartPaneRename={(pid, initial) => { setRenamingPaneId(pid); setPaneRenameDraft(initial); }}
+                onPaneRenameDraft={setPaneRenameDraft}
+                onCommitPaneRename={commitPaneRename}
+                onCancelPaneRename={() => { setRenamingPaneId(null); setPaneRenameDraft(""); }}
+                onClosePane={(pid) => closePane(t.id, pid)}
               />
             </div>
           ))}
@@ -2272,7 +2294,82 @@ type PaneViewProps = {
   getDndKind: () => "pane" | "tab" | null;
   getDndPaneId: () => string | null;
   onSessionStart?: (leafId: string, epoch: number) => void;
+  paneTitles: Record<string, string>;
+  renamingPaneId: string | null;
+  paneRenameDraft: string;
+  onStartPaneRename: (paneId: string, initial: string) => void;
+  onPaneRenameDraft: (v: string) => void;
+  onCommitPaneRename: () => void;
+  onCancelPaneRename: () => void;
+  onClosePane: (paneId: string) => void;
 };
+
+function PaneTitleBar({
+  leaf,
+  title,
+  renaming,
+  draft,
+  showClose,
+  onStartRename,
+  onDraftChange,
+  onCommitRename,
+  onCancelRename,
+  onClose,
+  onDragStart,
+  onDragEnd,
+}: {
+  leaf: PaneLeaf;
+  title: string;
+  renaming: boolean;
+  draft: string;
+  showClose: boolean;
+  onStartRename: () => void;
+  onDraftChange: (v: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onClose: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}) {
+  return (
+    <div
+      className="pane-titlebar"
+      draggable={!renaming}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onMouseDown={(e) => e.stopPropagation()}
+      title="Drag to move pane"
+    >
+      <span className="pane-grip-dots">⋮⋮</span>
+      <span className="pane-agent-chip"><AgentIcon id={leaf.agentId} size={12} /></span>
+      {renaming ? (
+        <input
+          className="pane-rename"
+          value={draft}
+          autoFocus
+          onChange={(e) => onDraftChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") { e.preventDefault(); onCommitRename(); }
+            else if (e.key === "Escape") { e.preventDefault(); onCancelRename(); }
+          }}
+          onBlur={onCommitRename}
+          placeholder={title || "Pane name"}
+        />
+      ) : (
+        <span
+          className="pane-title-label"
+          onDoubleClick={(e) => { e.stopPropagation(); onStartRename(); }}
+          title="Double-click to rename"
+        >{title}</span>
+      )}
+      {showClose && (
+        <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
+      )}
+    </div>
+  );
+}
 
 function flattenLeaves(node: PaneNode): PaneLeaf[] {
   return node.kind === "leaf" ? [node] : [...flattenLeaves(node.children[0]), ...flattenLeaves(node.children[1])];
@@ -2301,12 +2398,11 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
   const rectFor = (id: string) => rects.find((r) => r.id === id)!.rect;
-  const showClose = leaves.length > 1;
   const single = leaves.length === 1;
 
   return (
@@ -2353,45 +2449,46 @@ function PaneView(props: PaneViewProps) {
               onPaneDrop(leaf.id, edge);
             }}
           >
-            <div
-              className="pane-grip"
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = "move";
-                try { e.dataTransfer.setData("text/plain", "pane"); } catch {}
-                onPaneDragStart(leaf.id);
-              }}
-              onDragEnd={() => onPaneDragEnd()}
-              onMouseDown={(e) => e.stopPropagation()}
-              title="Drag to move pane"
-              aria-label="Drag pane"
-            >⋮⋮</div>
-            <TerminalView
-              key={`${leaf.id}-${leaf.epoch}`}
-              tabId={tabId}
-              paneId={leaf.id}
-              agentId={leaf.agentId}
-              cwd={leaf.cwd}
-              resumeId={leaf.resumeId}
-              continueLatest={leaf.continueLatest}
-              profileOverride={leaf.profileOverride}
-              epoch={leaf.epoch}
-              visible={tabVisible}
-              focused={isActive}
-              theme={theme}
-              onBell={onBell}
-              onTitle={onTitle}
-              onExit={() => onExitPane(leaf.id)}
-              onSessionStart={onSessionStart}
-            />
-            {showClose && (
-              <button
-                className="pane-close"
-                onClick={(e) => { e.stopPropagation(); onExitPane(leaf.id); }}
-                title="Close pane (⌘W)"
-                aria-label="Close pane"
-              >×</button>
+            {!single && (
+              <PaneTitleBar
+                leaf={leaf}
+                title={leaf.userTitle || paneTitles[leaf.id] || leaf.agentId}
+                renaming={renamingPaneId === leaf.id}
+                draft={paneRenameDraft}
+                showClose={leaves.length > 1}
+                onStartRename={() => onStartPaneRename(leaf.id, leaf.userTitle ?? "")}
+                onDraftChange={onPaneRenameDraft}
+                onCommitRename={onCommitPaneRename}
+                onCancelRename={onCancelPaneRename}
+                onClose={() => onClosePane(leaf.id)}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  try { e.dataTransfer.setData("text/plain", "pane"); } catch {}
+                  onPaneDragStart(leaf.id);
+                }}
+                onDragEnd={() => onPaneDragEnd()}
+              />
             )}
+            <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0" }}>
+              <TerminalView
+                key={`${leaf.id}-${leaf.epoch}`}
+                tabId={tabId}
+                paneId={leaf.id}
+                agentId={leaf.agentId}
+                cwd={leaf.cwd}
+                resumeId={leaf.resumeId}
+                continueLatest={leaf.continueLatest}
+                profileOverride={leaf.profileOverride}
+                epoch={leaf.epoch}
+                visible={tabVisible}
+                focused={isActive}
+                theme={theme}
+                onBell={onBell}
+                onTitle={onTitle}
+                onExit={() => onExitPane(leaf.id)}
+                onSessionStart={onSessionStart}
+              />
+            </div>
           </div>
         );
       })}

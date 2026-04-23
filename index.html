@@ -122,12 +122,31 @@
       .divider.divider-row { width: 4px; cursor: col-resize; }
       .divider.divider-column { height: 4px; cursor: row-resize; }
       .divider:hover { background: #ff8a4c; }
-      .pane-grip { position: absolute; top: 6px; left: 8px; z-index: 5; width: 22px; height: 22px; padding: 0; border-radius: 6px; background: var(--elev); color: var(--fg); font-size: 13px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; cursor: grab; opacity: 0.85; border: 1px solid var(--border); transition: opacity .15s, background .15s, color .15s, border-color .15s; user-select: none; letter-spacing: -3px; font-weight: 700; }
-      .pane-grip:hover { opacity: 1; background: var(--active-bg); color: var(--fg); border-color: var(--active-border); }
-      .pane-grip:active { cursor: grabbing; }
-      .pane-close { position: absolute; top: 4px; right: 6px; z-index: 5; width: 20px; height: 20px; padding: 0; border-radius: 10px; background: var(--elev); color: var(--muted); font-size: 13px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); opacity: 0; transition: opacity .15s, background .15s, color .15s; }
-      .pane:hover .pane-close, .pane.pane-active .pane-close { opacity: 0.85; }
-      .pane-close:hover { background: var(--border); color: var(--fg); opacity: 1; }
+      .pane-titlebar {
+        position: absolute; top: 0; left: 0; right: 0; height: 22px;
+        display: flex; align-items: center; gap: 6px;
+        padding: 0 8px;
+        background: var(--titlebar-bg, rgba(255,255,255,0.04));
+        border-bottom: 1px solid var(--border);
+        font-size: 11.5px; color: var(--muted);
+        cursor: grab; user-select: none;
+        z-index: 2;
+        box-sizing: border-box;
+      }
+      .pane-titlebar:active { cursor: grabbing; }
+      .pane-grip-dots { color: var(--muted); opacity: 0.7; }
+      .pane-agent-chip { display: inline-flex; align-items: center; }
+      .pane-title-label {
+        flex: 1; color: var(--fg);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .pane-rename {
+        flex: 1; background: transparent; border: 0; color: var(--fg);
+        font: inherit; outline: none; padding: 0;
+      }
+      .pane-close { color: var(--muted); cursor: pointer; padding: 0 4px; }
+      .pane-close:hover { color: var(--fg); }
+      body.theme-light .pane-titlebar { background: rgba(0,0,0,0.04); }
       .tab-pane-count { background: var(--border); color: var(--fg); font-size: 10px; font-weight: 600; border-radius: 10px; padding: 1px 6px; min-width: 16px; text-align: center; }
       .tab.active .tab-pane-count { background: #ff8a4c; color: #1a1a0f; }
       .term-wrap { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 6px 8px; background: var(--bg); box-sizing: border-box; overflow: hidden; }
