@@ -107,6 +107,8 @@ type PaneLeaf = {
   /** Per-pane Claude profile override. `undefined` → use path-based resolution.
    *  `null` → force default (~/.claude). String → use that profile id. */
   profileOverride?: string | null;
+  /** User-entered pane name. Takes precedence over the PTY-emitted title. */
+  userTitle?: string;
 };
 type PaneSplit = {
   kind: "split";
@@ -405,7 +407,8 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => loadPref<Theme>("vector.theme", "dark"));
   const [orientation, setOrientation] = useState<Orientation>(() => loadPref<Orientation>("vector.orientation", "horizontal"));
   const [bellTabs, setBellTabs] = useState<Set<string>>(new Set());
-  const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
+  // Key is paneId, not tabId. The tab header reads the active pane's entry.
+  const [paneTitles, setPaneTitles] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
@@ -642,8 +645,11 @@ export default function App() {
   }, [pushRecent]);
 
   const closeTab = useCallback((id: string) => {
+    let closedLeafIds: string[] = [];
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === id);
+      const closedTab = prev.find((t) => t.id === id);
+      if (closedTab) closedLeafIds = allLeafIds(closedTab.root);
       const next = prev.filter((t) => t.id !== id);
       if (!next.length) {
         setPicker({ open: true });
@@ -654,7 +660,15 @@ export default function App() {
       return next;
     });
     setBellTabs((b) => { const n = new Set(b); n.delete(id); return n; });
-    setTabTitles((m) => { if (!(id in m)) return m; const n = { ...m }; delete n[id]; return n; });
+    // Drop pane titles for every leaf in the closed tab.
+    if (closedLeafIds.length) {
+      setPaneTitles((m) => {
+        let changed = false;
+        const next = { ...m };
+        for (const pid of closedLeafIds) if (pid in next) { delete next[pid]; changed = true; }
+        return changed ? next : m;
+      });
+    }
   }, []);
 
   // Close a single pane. If the tab has no panes left, close the tab.
@@ -676,6 +690,12 @@ export default function App() {
       }
       const newActive = tab.activePaneId === paneId ? firstLeafId(newRoot) : tab.activePaneId;
       return prev.map((t) => t.id === tabId ? { ...t, root: newRoot, activePaneId: newActive } : t);
+    });
+    setPaneTitles((m) => {
+      if (!(paneId in m)) return m;
+      const next = { ...m };
+      delete next[paneId];
+      return next;
     });
   }, []);
 
@@ -732,8 +752,8 @@ export default function App() {
       : t));
   }, [activeId]);
 
-  const onTitle = useCallback((tabId: string, title: string) => {
-    setTabTitles((m) => (m[tabId] === title ? m : { ...m, [tabId]: title }));
+  const onTitle = useCallback((_tabId: string, paneId: string, title: string) => {
+    setPaneTitles((m) => (m[paneId] === title ? m : { ...m, [paneId]: title }));
   }, []);
 
   useEffect(() => {
@@ -958,7 +978,7 @@ export default function App() {
           const tabCwd = activeLeaf?.cwd ?? "";
           const agent = agents.find((a) => a.id === tabAgentId);
           const agentLabel = agent?.label ?? (tabAgentId === "__shell__" ? "shell" : tabAgentId);
-          const rawTitle = tabTitles[t.id] || "";
+          const rawTitle = paneTitles[t.activePaneId] || "";
           const stripped = rawTitle
             .replace(new RegExp(`^\\s*${agentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[–—\\-:·|·]?\\s*`, "i"), "")
             .trim();
@@ -2243,7 +2263,7 @@ type PaneViewProps = {
   theme: ITheme;
   onFocusPane: (paneId: string) => void;
   onBell: (tabId: string, paneId: string) => void;
-  onTitle: (tabId: string, title: string) => void;
+  onTitle: (tabId: string, paneId: string, title: string) => void;
   onExitPane: (paneId: string) => void;
   onResize: (splitId: string, ratio: number) => void;
   onPaneDragStart: (paneId: string) => void;
@@ -2443,7 +2463,7 @@ function TerminalView({
   focused: boolean;
   theme: ITheme;
   onBell: (tabId: string, paneId: string) => void;
-  onTitle: (tabId: string, title: string) => void;
+  onTitle: (tabId: string, paneId: string, title: string) => void;
   onExit: () => void;
   onSessionStart?: (leafId: string, epoch: number) => void;
 }) {
@@ -2532,7 +2552,7 @@ function TerminalView({
     termRef.current = term;
     fitRef.current = fit;
     term.onBell(() => onBell(tabId, paneId));
-    term.onTitleChange((t) => { if (t) onTitle(tabId, t); });
+    term.onTitleChange((t) => { if (t) onTitle(tabId, paneId, t); });
 
     // Right-click on a URL/path link → Open/Copy menu.
     // Right-click on a selection (no link) → Copy / Copy as plain text menu.
