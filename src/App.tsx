@@ -2107,7 +2107,7 @@ function ProfilePill({ profiles, cwd, override, onPick, onManage }: {
   const name = active?.name ?? "default";
 
   return (
-    <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
+    <div ref={ref} style={{ position: "relative" }}>
       <span
         className="profile-pill"
         onClick={() => setOpen((o) => !o)}
