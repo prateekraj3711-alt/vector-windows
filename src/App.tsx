@@ -407,6 +407,7 @@ export default function App() {
   const [bellTabs, setBellTabs] = useState<Set<string>>(new Set());
   const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [picker, setPicker] = useState<PickerState>({ open: true });
   const tabsLoaded = useRef(false);
@@ -701,6 +702,20 @@ export default function App() {
       : t));
   }, []);
 
+  /** Replace the active pane's agent in-place. Bumps epoch to trigger a TerminalView remount. */
+  const replaceActivePaneAgent = useCallback((nextAgentId: string) => {
+    setTabs((prev) => prev.map((t) => t.id !== activeIdRef.current ? t : ({
+      ...t,
+      root: mapLeaf(t.root, t.activePaneId, (leaf) => ({
+        ...leaf,
+        agentId: nextAgentId,
+        resumeId: undefined,
+        continueLatest: undefined,
+        epoch: leaf.epoch + 1,
+      })),
+    })));
+  }, []);
+
   const setSplitRatio = useCallback((tabId: string, splitId: string, ratio: number) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, root: updateRatio(t.root, splitId, ratio) } : t));
   }, []);
@@ -776,6 +791,11 @@ export default function App() {
       if (e.key === "," && !e.shiftKey && !e.altKey && !e.ctrlKey) {
         e.preventDefault();
         setSettingsOpen((o) => !o);
+        return;
+      }
+      if (e.key === "k" && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault();
+        setSwitcherOpen((o) => !o);
         return;
       }
       if (e.key === "t" && !e.shiftKey) { e.preventDefault(); openPickerForNewTab(); }
@@ -1310,6 +1330,13 @@ export default function App() {
           profiles={claudeProfiles}
           onProfilesChanged={reloadClaudeProfiles}
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {switcherOpen && (
+        <AgentSwitcher
+          agents={agents}
+          onPick={(id) => replaceActivePaneAgent(id)}
+          onClose={() => setSwitcherOpen(false)}
         />
       )}
     </>
@@ -2137,6 +2164,73 @@ function ProfilePill({ profiles, cwd, override, onPick, onManage }: {
           <div className="profile-dd-item accent" onClick={() => { setOpen(false); onManage(); }}>Manage profiles…</div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentSwitcher({
+  agents,
+  onPick,
+  onClose,
+}: {
+  agents: AgentMeta[];
+  onPick: (agentId: string) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [idx, setIdx] = useState(0);
+
+  const entries = useMemo<{ id: string; label: string }[]>(() => [
+    { id: "__shell__", label: "shell" },
+    ...agents.map((a) => ({ id: a.id, label: a.label })),
+  ], [agents]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q === ""
+    ? entries
+    : entries.filter((e) => e.id.toLowerCase().includes(q) || e.label.toLowerCase().includes(q));
+
+  useEffect(() => { setIdx(0); }, [q]);
+
+  const commit = (i: number) => {
+    const pick = filtered[i];
+    if (!pick) return;
+    onPick(pick.id);
+    onClose();
+  };
+
+  return (
+    <div className="picker-overlay" onClick={onClose}>
+      <div className="picker-card agent-switcher" onClick={(e) => e.stopPropagation()}>
+        <input
+          className="switcher-input"
+          autoFocus
+          placeholder="Switch agent…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { e.preventDefault(); onClose(); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); setIdx((i) => Math.min(i + 1, filtered.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setIdx((i) => Math.max(i - 1, 0)); }
+            else if (e.key === "Enter") { e.preventDefault(); commit(idx); }
+          }}
+        />
+        <div className="switcher-list">
+          {filtered.length === 0 && <div className="switcher-empty">No agents match.</div>}
+          {filtered.map((e, i) => (
+            <div
+              key={e.id}
+              className={`switcher-row${i === idx ? " active" : ""}`}
+              onMouseEnter={() => setIdx(i)}
+              onClick={() => commit(i)}
+            >
+              <AgentIcon id={e.id} size={16} />
+              <span className="switcher-label">{e.label}</span>
+              <span className="switcher-id">{e.id}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
