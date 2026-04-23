@@ -243,7 +243,6 @@ function migrateTab(raw: any): Tab {
 type SessionSummary = { id: string; agentId: string; title: string; modifiedMs: number; messageCount: number; hasRecap?: boolean };
 type PreviewMessage = { role: string; kind: "text" | "system" | "recap"; label?: string; text: string };
 type SessionDetail = { id: string; agentId: string; title: string; modifiedMs: number; messages: PreviewMessage[] };
-type Theme = "dark" | "light";
 type Orientation = "horizontal" | "vertical";
 type PickerState = { open: boolean; forTabId?: string };
 type SettingsSection = "appearance" | "shortcuts" | "profiles";
@@ -329,6 +328,11 @@ function basename(p: string): string {
   const parts = p.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
 }
+
+const DEFAULT_FONT_FAMILY = '"JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, "SF Mono", Menlo, "Apple Symbols", "Apple Color Emoji", "Segoe UI Symbol", monospace';
+const DEFAULT_FONT_SIZE = 13;
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 function agentColor(id: string): string {
   return AGENT_COLORS[id] ?? "#8a8aa0";
 }
@@ -404,7 +408,41 @@ export default function App() {
   const [defaultAgent, setDefaultAgent] = useState<string>("");
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string>("");
-  const [theme, setTheme] = useState<Theme>(() => loadPref<Theme>("vector.theme", "dark"));
+  const [fontFamily, setFontFamily] = useState<string>(() => {
+    try {
+      const raw = localStorage.getItem("vector.fontFamily");
+      return raw && raw.length > 0 ? raw : DEFAULT_FONT_FAMILY;
+    } catch { return DEFAULT_FONT_FAMILY; }
+  });
+  const [fontSize, setFontSize] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("vector.fontSize");
+      const n = raw ? Number(raw) : NaN;
+      return Number.isFinite(n) && n >= 8 && n <= 40 ? n : DEFAULT_FONT_SIZE;
+    } catch { return DEFAULT_FONT_SIZE; }
+  });
+  const [themeName, setThemeName] = useState<"dark" | "light" | "custom">(() => {
+    try {
+      const t = localStorage.getItem("vector.themeName");
+      if (t === "dark" || t === "light" || t === "custom") return t;
+      // Back-compat: migrate from the older "vector.theme" key
+      const legacy = localStorage.getItem("vector.theme");
+      return legacy === "light" ? "light" : "dark";
+    } catch { return "dark"; }
+  });
+  const [customTheme, setCustomTheme] = useState<ITheme | null>(() => {
+    try {
+      const raw = localStorage.getItem("vector.themeCustom");
+      return raw ? (JSON.parse(raw) as ITheme) : null;
+    } catch { return null; }
+  });
+  const [transparency, setTransparency] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("vector.transparency");
+      const n = raw ? Number(raw) : NaN;
+      return Number.isFinite(n) ? clamp(n, 0, 1) : 0;
+    } catch { return 0; }
+  });
   const [orientation, setOrientation] = useState<Orientation>(() => loadPref<Orientation>("vector.orientation", "horizontal"));
   const [bellTabs, setBellTabs] = useState<Set<string>>(new Set());
   // Key is paneId, not tabId. The tab header reads the active pane's entry.
@@ -577,7 +615,19 @@ export default function App() {
   const [updateCheck, setUpdateCheck] = useState<null | "checking" | "uptodate" | "error">(null);
   const notifReady = useRef(false);
 
-  useEffect(() => { document.body.className = theme === "light" ? "theme-light" : "theme-dark"; try { localStorage.setItem("vector.theme", theme); } catch {} }, [theme]);
+  useEffect(() => {
+    document.body.className = themeName === "light" ? "theme-light" : "theme-dark";
+  }, [themeName]);
+  useEffect(() => { try { localStorage.setItem("vector.fontFamily", fontFamily); } catch {} }, [fontFamily]);
+  useEffect(() => { try { localStorage.setItem("vector.fontSize", String(fontSize)); } catch {} }, [fontSize]);
+  useEffect(() => { try { localStorage.setItem("vector.themeName", themeName); } catch {} }, [themeName]);
+  useEffect(() => {
+    try {
+      if (customTheme) localStorage.setItem("vector.themeCustom", JSON.stringify(customTheme));
+      else localStorage.removeItem("vector.themeCustom");
+    } catch {}
+  }, [customTheme]);
+  useEffect(() => { try { localStorage.setItem("vector.transparency", String(transparency)); } catch {} }, [transparency]);
   useEffect(() => { try { localStorage.setItem("vector.orientation", orientation); } catch {} }, [orientation]);
 
   useEffect(() => {
@@ -863,7 +913,10 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId);
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
-  const xtermTheme = theme === "light" ? lightTheme : darkTheme;
+  const xtermTheme: ITheme = useMemo(() => {
+    if (themeName === "custom" && customTheme) return customTheme;
+    return themeName === "light" ? lightTheme : darkTheme;
+  }, [themeName, customTheme]);
 
   const ctxAgentId = activeLeaf?.agentId ?? "";
   // Resolve which Claude profile the active pane is using. Mirrors ProfilePill.
@@ -1325,6 +1378,8 @@ export default function App() {
                 activePaneId={t.activePaneId}
                 tabVisible={t.id === activeId}
                 theme={xtermTheme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
                 onFocusPane={(pid) => setActivePane(t.id, pid)}
                 onBell={onBell}
                 onTitle={onTitle}
@@ -1365,8 +1420,8 @@ export default function App() {
         <SettingsModal
           section={settingsSection}
           onSection={setSettingsSection}
-          theme={theme}
-          onTheme={setTheme}
+          themeName={themeName}
+          onThemeName={setThemeName}
           orientation={orientation}
           onOrientation={setOrientation}
           profiles={claudeProfiles}
@@ -1730,8 +1785,8 @@ function PickerModal({
 function SettingsModal({
   section,
   onSection,
-  theme,
-  onTheme,
+  themeName,
+  onThemeName,
   orientation,
   onOrientation,
   profiles,
@@ -1740,8 +1795,8 @@ function SettingsModal({
 }: {
   section: SettingsSection;
   onSection: (s: SettingsSection) => void;
-  theme: Theme;
-  onTheme: (t: Theme) => void;
+  themeName: "dark" | "light" | "custom";
+  onThemeName: (t: "dark" | "light" | "custom") => void;
   orientation: Orientation;
   onOrientation: (o: Orientation) => void;
   profiles: ClaudeProfileDto[];
@@ -1791,8 +1846,8 @@ function SettingsModal({
                 <div className="settings-row">
                   <span>Theme</span>
                   <div className="seg">
-                    <button className={theme === "dark" ? "on" : ""} onClick={() => onTheme("dark")}>Dark</button>
-                    <button className={theme === "light" ? "on" : ""} onClick={() => onTheme("light")}>Light</button>
+                    <button className={themeName === "dark" ? "on" : ""} onClick={() => onThemeName("dark")}>Dark</button>
+                    <button className={themeName === "light" ? "on" : ""} onClick={() => onThemeName("light")}>Light</button>
                   </div>
                 </div>
                 <div className="settings-row">
@@ -2283,6 +2338,8 @@ type PaneViewProps = {
   activePaneId: string;
   tabVisible: boolean;
   theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
   onFocusPane: (paneId: string) => void;
   onBell: (tabId: string, paneId: string) => void;
   onTitle: (tabId: string, paneId: string, title: string) => void;
@@ -2398,7 +2455,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -2483,6 +2540,8 @@ function PaneView(props: PaneViewProps) {
                 visible={tabVisible}
                 focused={isActive}
                 theme={theme}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
                 onBell={onBell}
                 onTitle={onTitle}
                 onExit={() => onExitPane(leaf.id)}
@@ -2543,6 +2602,8 @@ function TerminalView({
   visible,
   focused,
   theme,
+  fontFamily,
+  fontSize,
   onBell,
   onTitle,
   onExit,
@@ -2559,6 +2620,8 @@ function TerminalView({
   visible: boolean;
   focused: boolean;
   theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
   onBell: (tabId: string, paneId: string) => void;
   onTitle: (tabId: string, paneId: string, title: string) => void;
   onExit: () => void;
@@ -2579,11 +2642,19 @@ function TerminalView({
   useEffect(() => { if (termRef.current) termRef.current.options.theme = theme; }, [theme]);
 
   useEffect(() => {
+    const t = termRef.current;
+    if (!t) return;
+    t.options.fontFamily = fontFamily;
+    t.options.fontSize = fontSize;
+    try { fitRef.current?.fit(); } catch {}
+  }, [fontFamily, fontSize]);
+
+  useEffect(() => {
     if (!wrapRef.current) return;
 
     const term = new Terminal({
-      fontFamily: '"JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, "SF Mono", Menlo, "Apple Symbols", "Apple Color Emoji", "Segoe UI Symbol", monospace',
-      fontSize: 13,
+      fontFamily,
+      fontSize,
       cursorBlink: true,
       theme,
       allowProposedApi: true,
