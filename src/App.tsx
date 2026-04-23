@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -10,12 +10,25 @@ import {
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
+
+// Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
+// Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
+function cmpSemver(a: string, b: string): number {
+  const pa = a.split(".").map((p) => parseInt(p, 10) || 0);
+  const pb = b.split(".").map((p) => parseInt(p, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
 
 // Minimal markdown → JSX renderer for the "What's new" modal. Supports the
 // subset we actually write in release notes: `##` headings, `-` list items,
@@ -91,6 +104,9 @@ type PaneLeaf = {
   resumeId?: string;
   continueLatest?: boolean;
   epoch: number;
+  /** Per-pane Claude profile override. `undefined` → use path-based resolution.
+   *  `null` → force default (~/.claude). String → use that profile id. */
+  profileOverride?: string | null;
 };
 type PaneSplit = {
   kind: "split";
@@ -228,6 +244,37 @@ type SessionDetail = { id: string; agentId: string; title: string; modifiedMs: n
 type Theme = "dark" | "light";
 type Orientation = "horizontal" | "vertical";
 type PickerState = { open: boolean; forTabId?: string };
+type SettingsSection = "appearance" | "shortcuts" | "profiles";
+
+type ClaudeProfileDto = {
+  id: string;
+  name: string;
+  color: string;
+  folders: string[];
+  createdMs: number;
+  configDir: string;
+  signedInEmail: string | null;
+};
+
+const PROFILE_COLORS = ["#7fd6b5", "#8aa8ff", "#f08a9a", "#f5b14a", "#a88af0", "#7ad3e3"];
+const DEFAULT_PROFILE_COLOR = PROFILE_COLORS[0];
+
+/** Longest-prefix folder match, mirroring backend `resolve_profile_for_path`. */
+function resolveProfileForCwd(profiles: ClaudeProfileDto[], cwd: string): ClaudeProfileDto | null {
+  if (!cwd) return null;
+  const norm = cwd.replace(/\/+$/, "");
+  let best: { profile: ClaudeProfileDto; depth: number } | null = null;
+  for (const p of profiles) {
+    for (const folder of p.folders) {
+      const f = folder.replace(/\/+$/, "");
+      if (norm === f || norm.startsWith(f + "/")) {
+        const depth = f.split("/").length;
+        if (!best || depth > best.depth) best = { profile: p, depth };
+      }
+    }
+  }
+  return best?.profile ?? null;
+}
 
 const darkTheme: ITheme = { background: "#0b0b0f", foreground: "#e6e6e6", cursor: "#e6e6e6" };
 // Solarized Light: easy on the eyes
@@ -360,6 +407,7 @@ export default function App() {
   const [bellTabs, setBellTabs] = useState<Set<string>>(new Set());
   const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [picker, setPicker] = useState<PickerState>({ open: true });
   const tabsLoaded = useRef(false);
   const activeIdRef = useRef("");
@@ -368,10 +416,17 @@ export default function App() {
   type DndPayload = { kind: "pane"; fromTabId: string; paneId: string } | { kind: "tab"; tabId: string };
   const dndRef = useRef<DndPayload | null>(null);
   const getDnd = useCallback(() => dndRef.current, []);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [tabDropIndex, setTabDropIndex] = useState<number | null>(null);
+  const [claudeProfiles, setClaudeProfiles] = useState<ClaudeProfileDto[]>([]);
+  const reloadClaudeProfiles = useCallback(async () => {
+    try {
+      const list = await invoke<ClaudeProfileDto[]>("list_claude_profiles");
+      setClaudeProfiles(list);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { reloadClaudeProfiles(); }, [reloadClaudeProfiles]);
   type UsageBucket = { utilization: number; resetsAt?: string | null };
   type ClaudeUsage = { fiveHour?: UsageBucket | null; sevenDay?: UsageBucket | null; sevenDaySonnet?: UsageBucket | null; sevenDayOpus?: UsageBucket | null };
   const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
@@ -497,6 +552,8 @@ export default function App() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<"idle" | "downloading" | "ready" | "error">("idle");
   const [showNotes, setShowNotes] = useState(false);
+  const [aggregateNotes, setAggregateNotes] = useState<{ markdown: string; versions: number } | null>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
   const [updateCheck, setUpdateCheck] = useState<null | "checking" | "uptodate" | "error">(null);
   const notifReady = useRef(false);
 
@@ -633,6 +690,14 @@ export default function App() {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, activePaneId: paneId } : t));
   }, []);
 
+  /** Set the Claude profile override on the active pane of `tabId`, then restart it
+   *  (epoch bump) so the new CLAUDE_CONFIG_DIR takes effect. */
+  const setPaneProfileOverride = useCallback((tabId: string, override: string | null | undefined) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, profileOverride: override, epoch: leaf.epoch + 1 })) }
+      : t));
+  }, []);
+
   const setSplitRatio = useCallback((tabId: string, splitId: string, ratio: number) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, root: updateRatio(t.root, splitId, ratio) } : t));
   }, []);
@@ -705,6 +770,11 @@ export default function App() {
         return;
       }
       if (!e.metaKey) return;
+      if (e.key === "," && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        e.preventDefault();
+        setSettingsOpen((o) => !o);
+        return;
+      }
       if (e.key === "t" && !e.shiftKey) { e.preventDefault(); openPickerForNewTab(); }
       else if (e.key === "w" && !e.shiftKey) {
         e.preventDefault();
@@ -910,6 +980,15 @@ export default function App() {
                 >{title}</span>
               )}
               {(() => { const n = allLeafIds(t.root).length; return n > 1 ? <span className="tab-pane-count">{n}</span> : null; })()}
+              {tabAgentId === "claude" && (
+                <ProfilePill
+                  profiles={claudeProfiles}
+                  cwd={tabCwd}
+                  override={activeLeaf?.profileOverride}
+                  onPick={(id) => setPaneProfileOverride(t.id, id)}
+                  onManage={() => { setSettingsSection("profiles"); setSettingsOpen(true); }}
+                />
+              )}
               <span className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>
             </div>
           );
@@ -972,6 +1051,54 @@ export default function App() {
     return () => { if (unlisten) unlisten(); };
   }, [runUpdateCheck]);
 
+  // Fetch GitHub release notes for every version between the currently-installed
+  // one and the offered update. Falls back to just the latest release's body if
+  // the fetch fails (offline, rate-limited, etc).
+  const fetchAggregateNotes = useCallback(async () => {
+    if (!update) return;
+    const current = await getVersion();
+    // Cache by (current → latest) pair so reopening the modal doesn't re-hit
+    // the GitHub API every time — 60 req/hr/IP is the unauth limit.
+    const cacheKey = `vector.whatsnew.${current}->${update.version}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) { setAggregateNotes(JSON.parse(cached)); return; }
+    } catch {}
+    setNotesLoading(true);
+    // Hard timeout so a captive portal / stalled DNS doesn't leave the modal
+    // spinning indefinitely.
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const res = await fetch("https://api.github.com/repos/avram19/vector/releases?per_page=50", {
+        headers: { Accept: "application/vnd.github+json" },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) throw new Error(`github ${res.status}`);
+      const releases: Array<{ tag_name: string; name: string | null; body: string | null }> = await res.json();
+      const entries = releases
+        .map((r) => ({ version: (r.tag_name || "").replace(/^v/, ""), body: r.body || "" }))
+        .filter((r) => r.version && cmpSemver(r.version, current) > 0 && cmpSemver(r.version, update.version) <= 0)
+        .sort((a, b) => cmpSemver(b.version, a.version));
+      const payload = entries.length === 0
+        ? { markdown: update.body || "", versions: 1 }
+        : { markdown: entries.map((e) => `## v${e.version}\n\n${e.body.trim()}`).join("\n\n"), versions: entries.length };
+      setAggregateNotes(payload);
+      try { localStorage.setItem(cacheKey, JSON.stringify(payload)); } catch {}
+    } catch {
+      setAggregateNotes({ markdown: update?.body || "", versions: 1 });
+    } finally {
+      window.clearTimeout(timer);
+      setNotesLoading(false);
+    }
+  }, [update]);
+
+  // Load once when the user first opens the modal. Reset whenever `update` changes.
+  useEffect(() => { setAggregateNotes(null); }, [update?.version]);
+  useEffect(() => {
+    if (showNotes && !aggregateNotes && !notesLoading) fetchAggregateNotes();
+  }, [showNotes, aggregateNotes, notesLoading, fetchAggregateNotes]);
+
   return (
     <>
       {update && (
@@ -990,14 +1117,23 @@ export default function App() {
           </div>
         </div>
       )}
-      {showNotes && update?.body && (
+      {showNotes && update && (
         <div className="picker-overlay" onClick={() => setShowNotes(false)}>
           <div className="picker-card whatsnew-card" onClick={(e) => e.stopPropagation()}>
             <div className="picker-head">
-              <div className="picker-brand"><VectorMark size={14} /> What’s new in {update.version}</div>
+              <div className="picker-brand">
+                <VectorMark size={14} />
+                {aggregateNotes && aggregateNotes.versions > 1
+                  ? <>What’s new · {aggregateNotes.versions} releases</>
+                  : <>What’s new in {update.version}</>}
+              </div>
               <button className="icon-btn" onClick={() => setShowNotes(false)} aria-label="Close">×</button>
             </div>
-            <div className="whatsnew-body">{renderMarkdown(update.body)}</div>
+            <div className="whatsnew-body">
+              {notesLoading && !aggregateNotes
+                ? <div style={{ color: "var(--muted)", fontSize: 12 }}>Loading release notes…</div>
+                : renderMarkdown(aggregateNotes?.markdown || update.body || "")}
+            </div>
           </div>
         </div>
       )}
@@ -1081,47 +1217,9 @@ export default function App() {
           </button>
         )}
         <div className="settings">
-          <button className="icon-btn" onClick={() => { setShortcutsOpen((o) => !o); setSettingsOpen(false); }} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
-            <KeyboardIcon />
-          </button>
-          {shortcutsOpen && (
-            <div className="settings-panel shortcuts-panel" onMouseLeave={() => setShortcutsOpen(false)}>
-              <div className="shortcuts-title">Keyboard shortcuts</div>
-              <div className="shortcuts-list">
-                <Shortcut keys="⌘ + T" label="New tab" />
-                <Shortcut keys="⌘ + W" label="Close active pane" />
-                <Shortcut keys="⌘ + D" label="Split pane right" />
-                <Shortcut keys="⌘ + ⇧ + D" label="Split pane down" />
-                <Shortcut keys="⌘ + ⌥ + arrow" label="Focus adjacent pane" />
-                <Shortcut keys="⌘ + ⇧ + R" label="Reload active pane" />
-                <Shortcut keys="⌘ + 1–9" label="Switch tab" />
-                <Shortcut keys="Ctrl + Tab" label="Next tab" />
-                <Shortcut keys="Ctrl + ⇧ + Tab" label="Previous tab" />
-                <Shortcut keys="⇧ + Enter" label="Multi-line input (Claude Code)" />
-              </div>
-            </div>
-          )}
-          <button className="icon-btn" onClick={() => { setSettingsOpen((o) => !o); setShortcutsOpen(false); }} title="Settings" aria-label="Settings">
+          <button className="icon-btn" onClick={() => { setSettingsSection("appearance"); setSettingsOpen(true); }} title="Settings (⌘,)" aria-label="Settings">
             <GearIcon />
           </button>
-          {settingsOpen && (
-            <div className="settings-panel" onMouseLeave={() => setSettingsOpen(false)}>
-              <div className="settings-row">
-                <span>Theme</span>
-                <div className="seg">
-                  <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}>Dark</button>
-                  <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}>Light</button>
-                </div>
-              </div>
-              <div className="settings-row">
-                <span>Tabs</span>
-                <div className="seg">
-                  <button className={orientation === "horizontal" ? "on" : ""} onClick={() => setOrientation("horizontal")}>Top</button>
-                  <button className={orientation === "vertical" ? "on" : ""} onClick={() => setOrientation("vertical")}>Side</button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
       {fiveHour && ctxPct >= 60 && (
@@ -1172,6 +1270,19 @@ export default function App() {
           headerTitle={picker.forTabId ? "Change project for this tab" : "Open a project"}
         />
       )}
+      {settingsOpen && (
+        <SettingsModal
+          section={settingsSection}
+          onSection={setSettingsSection}
+          theme={theme}
+          onTheme={setTheme}
+          orientation={orientation}
+          onOrientation={setOrientation}
+          profiles={claudeProfiles}
+          onProfilesChanged={reloadClaudeProfiles}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -1185,10 +1296,95 @@ function KeyboardIcon() {
   );
 }
 
-function Shortcut({ keys, label }: { keys: string; label: string }) {
+function PaletteIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 22a10 10 0 1 1 10-10c0 2-1.5 3-3 3h-2a2 2 0 0 0-1 3.7 2 2 0 0 1-1.6 3.3H12z" />
+      <circle cx="7.5" cy="10.5" r="1" fill="currentColor"/>
+      <circle cx="12" cy="7" r="1" fill="currentColor"/>
+      <circle cx="16.5" cy="10.5" r="1" fill="currentColor"/>
+    </svg>
+  );
+}
+
+function UsersIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+/** Individual key cap. `k` is either a modifier name ("cmd"/"shift"/"opt"/"ctrl"),
+ *  an arrow name ("up"/"down"/"left"/"right"), or literal text. */
+function Keycap({ k }: { k: string }) {
+  const icon = modIcon(k);
+  return <span className="kbd" aria-label={k}>{icon ?? k}</span>;
+}
+
+function modIcon(k: string): React.ReactNode | null {
+  const sz = 11;
+  const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  switch (k) {
+    case "cmd": return (
+      <svg width={sz} height={sz} viewBox="0 0 16 16" aria-hidden {...stroke}>
+        <path d="M6 4h4v8H6z" />
+        <circle cx="4" cy="4" r="2" />
+        <circle cx="12" cy="4" r="2" />
+        <circle cx="4" cy="12" r="2" />
+        <circle cx="12" cy="12" r="2" />
+      </svg>
+    );
+    case "shift": return (
+      <svg width={sz} height={sz} viewBox="0 0 16 16" aria-hidden {...stroke}>
+        <path d="M8 2 L14 8 H11 V14 H5 V8 H2 Z" />
+      </svg>
+    );
+    case "opt": return (
+      <svg width={sz} height={sz} viewBox="0 0 16 16" aria-hidden {...stroke}>
+        <path d="M2 4h4l5 8h3" />
+        <path d="M10 4h4" />
+      </svg>
+    );
+    case "ctrl": return (
+      <svg width={sz} height={sz} viewBox="0 0 16 16" aria-hidden {...stroke}>
+        <path d="M3 10l5-5 5 5" />
+      </svg>
+    );
+    case "up": return arrowSvg("M8 3 V13 M4 7 L8 3 L12 7");
+    case "down": return arrowSvg("M8 3 V13 M4 9 L8 13 L12 9");
+    case "left": return arrowSvg("M3 8 H13 M7 4 L3 8 L7 12");
+    case "right": return arrowSvg("M3 8 H13 M9 4 L13 8 L9 12");
+    case "enter": return (
+      <svg width={sz} height={sz} viewBox="0 0 16 16" aria-hidden {...stroke}>
+        <path d="M13 4 V9 H4 M7 6 L4 9 L7 12" />
+      </svg>
+    );
+    default: return null;
+  }
+}
+function arrowSvg(d: string) {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={d} />
+    </svg>
+  );
+}
+
+function Shortcut({ keys, label }: { keys: string[]; label: string }) {
   return (
     <div className="shortcut-row">
-      <span className="shortcut-keys">{keys}</span>
+      <span className="shortcut-keys">
+        {keys.map((k, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="kbd-plus">+</span>}
+            <Keycap k={k} />
+          </React.Fragment>
+        ))}
+      </span>
       <span className="shortcut-label">{label}</span>
     </div>
   );
@@ -1433,6 +1629,489 @@ function PickerModal({
   );
 }
 
+function SettingsModal({
+  section,
+  onSection,
+  theme,
+  onTheme,
+  orientation,
+  onOrientation,
+  profiles,
+  onProfilesChanged,
+  onClose,
+}: {
+  section: SettingsSection;
+  onSection: (s: SettingsSection) => void;
+  theme: Theme;
+  onTheme: (t: Theme) => void;
+  orientation: Orientation;
+  onOrientation: (o: Orientation) => void;
+  profiles: ClaudeProfileDto[];
+  onProfilesChanged: () => void | Promise<void>;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const navItems: { id: SettingsSection; label: string; icon: ReactNode }[] = [
+    { id: "appearance", label: "Appearance", icon: <PaletteIcon /> },
+    { id: "shortcuts", label: "Keyboard shortcuts", icon: <KeyboardIcon /> },
+    { id: "profiles", label: "Claude Profiles", icon: <UsersIcon /> },
+  ];
+
+  return (
+    <div className="picker-overlay" onClick={onClose}>
+      <div className="picker-card settings-modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="settings-modal-header">
+          <div className="picker-brand"><VectorMark /> <span>Settings</span></div>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="settings-modal-body">
+          <aside className="settings-sidebar">
+            <div className="settings-nav-heading">General</div>
+            {navItems.slice(0, 2).map((n) => (
+              <button key={n.id} className={`settings-nav-item${section === n.id ? " active" : ""}`} onClick={() => onSection(n.id)}>
+                {n.icon}<span>{n.label}</span>
+              </button>
+            ))}
+            <div className="settings-nav-heading">Agents</div>
+            {navItems.slice(2).map((n) => (
+              <button key={n.id} className={`settings-nav-item${section === n.id ? " active" : ""}`} onClick={() => onSection(n.id)}>
+                {n.icon}<span>{n.label}</span>
+              </button>
+            ))}
+          </aside>
+          <section className="settings-content">
+            {section === "appearance" && (
+              <>
+                <h2 className="settings-section-title">Appearance</h2>
+                <div className="settings-row">
+                  <span>Theme</span>
+                  <div className="seg">
+                    <button className={theme === "dark" ? "on" : ""} onClick={() => onTheme("dark")}>Dark</button>
+                    <button className={theme === "light" ? "on" : ""} onClick={() => onTheme("light")}>Light</button>
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span>Tabs</span>
+                  <div className="seg">
+                    <button className={orientation === "horizontal" ? "on" : ""} onClick={() => onOrientation("horizontal")}>Top</button>
+                    <button className={orientation === "vertical" ? "on" : ""} onClick={() => onOrientation("vertical")}>Side</button>
+                  </div>
+                </div>
+              </>
+            )}
+            {section === "shortcuts" && (
+              <>
+                <h2 className="settings-section-title">Keyboard shortcuts</h2>
+                <div className="shortcuts-list">
+                  <Shortcut keys={["cmd", "T"]} label="New tab" />
+                  <Shortcut keys={["cmd", "W"]} label="Close active pane" />
+                  <Shortcut keys={["cmd", "D"]} label="Split pane right" />
+                  <Shortcut keys={["cmd", "shift", "D"]} label="Split pane down" />
+                  <Shortcut keys={["cmd", "opt", "left"]} label="Focus pane left" />
+                  <Shortcut keys={["cmd", "opt", "right"]} label="Focus pane right" />
+                  <Shortcut keys={["cmd", "opt", "up"]} label="Focus pane up" />
+                  <Shortcut keys={["cmd", "opt", "down"]} label="Focus pane down" />
+                  <Shortcut keys={["cmd", "shift", "R"]} label="Reload active pane" />
+                  <Shortcut keys={["cmd", "1–9"]} label="Switch tab" />
+                  <Shortcut keys={["ctrl", "Tab"]} label="Next tab" />
+                  <Shortcut keys={["ctrl", "shift", "Tab"]} label="Previous tab" />
+                  <Shortcut keys={["shift", "enter"]} label="Multi-line input (Claude Code)" />
+                  <Shortcut keys={["cmd", ","]} label="Open settings" />
+                </div>
+              </>
+            )}
+            {section === "profiles" && <ProfilesSection profiles={profiles} onChanged={onProfilesChanged} />}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfilesSection({ profiles, onChanged }: { profiles: ClaudeProfileDto[]; onChanged: () => void | Promise<void> }) {
+  const [error, setError] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; profile: ClaudeProfileDto } | null>(null);
+
+  const onDelete = useCallback(async (p: ClaudeProfileDto) => {
+    if (!window.confirm(`Delete profile "${p.name}"?\n\nFolder mappings will be cleared. Your login for this profile stays on disk at:\n${p.configDir}`)) return;
+    try {
+      await invoke("delete_claude_profile", { id: p.id });
+      await onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [onChanged]);
+
+  return (
+    <>
+      <h2 className="settings-section-title">Claude Profiles</h2>
+      <p className="settings-section-sub">
+        Keep separate Claude accounts for different folders. Vector switches automatically based on the project path a tab opens in — no more logout/login dance.
+      </p>
+      {error && <div style={{ color: "#ff5a5a", fontSize: 12 }}>{error}</div>}
+      {profiles.length === 0 ? (
+        <button className="profile-add" onClick={() => setDialog({ mode: "create" })}>
+          <span>＋</span><span>Add your first profile</span>
+        </button>
+      ) : (
+        <>
+          <div className="profiles-list">
+            {profiles.map((p) => <ProfileRow key={p.id} profile={p} onEdit={() => setDialog({ mode: "edit", profile: p })} onDelete={() => onDelete(p)} />)}
+          </div>
+          <button className="profile-add" onClick={() => setDialog({ mode: "create" })}>
+            <span>＋</span><span>Add profile</span>
+          </button>
+        </>
+      )}
+      <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>
+        Folders not mapped above use your default Claude login (<span className="mono">~/.claude</span>). First time you open a new profile, Claude Code will prompt you to <span className="mono">/login</span> — that stays for future sessions.
+      </div>
+      {dialog && (
+        <ProfileDialog
+          mode={dialog.mode}
+          initial={dialog.mode === "edit" ? dialog.profile : undefined}
+          onClose={() => setDialog(null)}
+          onSaved={async () => { setDialog(null); await onChanged(); }}
+        />
+      )}
+    </>
+  );
+}
+
+function ProfileRow({ profile, onEdit, onDelete }: { profile: ClaudeProfileDto; onEdit: () => void; onDelete: () => void }) {
+  const initial = (profile.name[0] ?? "?").toUpperCase();
+  const n = profile.folders.length;
+  return (
+    <div className="profile-row">
+      <div className="profile-avatar" style={{ background: profile.color }}>{initial}</div>
+      <div className="profile-name-wrap">
+        <div className="profile-name-line">
+          <span className="profile-name">{profile.name}</span>
+        </div>
+        {n > 0 ? (
+          <span className="folders-trigger" tabIndex={0}>
+            {n} folder{n === 1 ? "" : "s"}
+            <div className="folders-popover" role="tooltip">
+              {profile.folders.map((f) => <span key={f} className="folders-popover-item">{f}</span>)}
+            </div>
+          </span>
+        ) : (
+          <span style={{ fontSize: 11.5, color: "var(--muted)" }}>no folders yet</span>
+        )}
+      </div>
+      <div className="profile-email">
+        {profile.signedInEmail ? (
+          <>
+            <span className="em" title={profile.signedInEmail}>{profile.signedInEmail}</span>
+            <span>signed in</span>
+          </>
+        ) : (
+          <span>not signed in</span>
+        )}
+      </div>
+      <div className="profile-actions">
+        <button className="icon-btn" onClick={onEdit} aria-label="Edit" title="Edit">✎</button>
+        <button className="icon-btn" onClick={onDelete} aria-label="Delete" title="Delete">×</button>
+      </div>
+    </div>
+  );
+}
+
+type ClaudeHomeValidation = {
+  valid: boolean;
+  expandedPath: string;
+  hasCredentials: boolean;
+  hasConfig: boolean;
+  hasProjects: boolean;
+  siblingConfigPath: string | null;
+  detectedEmail: string | null;
+  credentialsInKeychain: boolean;
+};
+
+function ProfileDialog({ mode, initial, onClose, onSaved }: {
+  mode: "create" | "edit";
+  initial?: ClaudeProfileDto;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [color, setColor] = useState(initial?.color ?? DEFAULT_PROFILE_COLOR);
+  const [folders, setFolders] = useState<string[]>(initial?.folders ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Seed-from is create-mode only. Defaults to ~/.claude; user can override.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [seedPath, setSeedPath] = useState<string>(mode === "create" ? "~/.claude" : "");
+  const [seedValidation, setSeedValidation] = useState<ClaudeHomeValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+
+  // Debounced validation whenever the seed path changes (create mode only).
+  useEffect(() => {
+    if (mode !== "create") return;
+    if (!seedPath.trim()) { setSeedValidation(null); return; }
+    const handle = window.setTimeout(async () => {
+      setValidating(true);
+      try {
+        const v = await invoke<ClaudeHomeValidation>("validate_claude_home", { path: seedPath });
+        setSeedValidation(v);
+      } catch {
+        setSeedValidation(null);
+      } finally {
+        setValidating(false);
+      }
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [seedPath, mode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const addFolder = async () => {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false });
+      if (typeof selected === "string" && !folders.includes(selected)) {
+        setFolders([...folders, selected]);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const pickSeedFolder = async () => {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false });
+      if (typeof selected === "string") setSeedPath(selected);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) { setError("Name is required"); return; }
+    // If the user picked a seed path but it's invalid, block save.
+    if (mode === "create" && seedPath.trim() && seedValidation && !seedValidation.valid) {
+      setError("Seed folder isn't a Claude home. Clear it to start fresh, or pick a valid folder.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "create") {
+        await invoke("create_claude_profile", {
+          name: trimmed,
+          color,
+          folders,
+          seedFrom: seedPath.trim() || null,
+        });
+      } else if (initial) {
+        await invoke("update_claude_profile", { id: initial.id, name: trimmed, color, folders });
+      }
+      await onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canShowAdvanced = mode === "create";
+
+  return (
+    <div className="picker-overlay" onClick={onClose} style={{ zIndex: 60 }}>
+      <div className="picker-card profile-dialog" onClick={(e) => e.stopPropagation()}>
+        <h3>{mode === "create" ? "New profile" : "Edit profile"}</h3>
+        <div className="profile-field">
+          <label>Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Work" autoFocus />
+        </div>
+        <div className="profile-field">
+          <label>Folders</label>
+          <button type="button" className="folder-picker-btn" onClick={addFolder}>＋ Add folder…</button>
+          {folders.length > 0 && (
+            <div className="profile-folders" style={{ marginTop: 6 }}>
+              {folders.map((f) => (
+                <span key={f} className="folder-chip">
+                  {f}
+                  <span className="x" onClick={() => setFolders(folders.filter((x) => x !== f))}>×</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="profile-field">
+          <label>Color</label>
+          <div className="color-swatches">
+            {PROFILE_COLORS.map((c) => (
+              <span
+                key={c}
+                className={`color-swatch${c === color ? " on" : ""}`}
+                style={{ background: c }}
+                onClick={() => setColor(c)}
+              />
+            ))}
+          </div>
+        </div>
+        {canShowAdvanced && (
+          <details className="profile-advanced" open={advancedOpen} onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}>
+            <summary>Advanced</summary>
+            <div className="profile-field" style={{ marginTop: 10 }}>
+              <label>Seed from</label>
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6, lineHeight: 1.4 }}>
+                Copy credentials, settings, and session history from an existing Claude home. Leave empty to start fresh.
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={seedPath}
+                  onChange={(e) => setSeedPath(e.target.value)}
+                  placeholder="~/.claude"
+                  style={{ flex: 1 }}
+                />
+                <button type="button" className="folder-picker-btn" onClick={pickSeedFolder} style={{ padding: "7px 10px" }}>Browse…</button>
+                {seedPath && (
+                  <button type="button" onClick={() => setSeedPath("")} title="Clear (start fresh)">×</button>
+                )}
+              </div>
+              <SeedValidationStatus seedPath={seedPath} validating={validating} validation={seedValidation} />
+            </div>
+          </details>
+        )}
+        {error && <div style={{ color: "#ff5a5a", fontSize: 12 }}>{error}</div>}
+        <div className="profile-dialog-foot">
+          <button onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn-primary" onClick={save} disabled={busy || !name.trim()}>
+            {mode === "create" ? "Create profile" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SeedValidationStatus({ seedPath, validating, validation }: {
+  seedPath: string;
+  validating: boolean;
+  validation: ClaudeHomeValidation | null;
+}) {
+  if (!seedPath.trim()) {
+    return <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>Will create an empty profile (Claude will prompt to <span className="mono">/login</span> on first use).</div>;
+  }
+  if (validating || !validation) {
+    return <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 6 }}>Checking…</div>;
+  }
+  if (validation.valid) {
+    return (
+      <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ fontSize: 11.5, color: "#7fd6b5", display: "flex", alignItems: "center", gap: 6 }}>
+          <span>✓</span>
+          <span>
+            Looks like a Claude home
+            {validation.detectedEmail && <> · <span style={{ color: "var(--fg)" }}>{validation.detectedEmail}</span></>}
+            {validation.hasProjects && <> · session history included</>}
+          </span>
+        </div>
+        {validation.credentialsInKeychain && (
+          <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4, paddingLeft: 18 }}>
+            Credentials appear to be in macOS Keychain — you'll still need to <span className="mono">/login</span> once in the new profile. Settings &amp; history carry over.
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: 11.5, color: "#ff5a5a", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}>
+      <span>✗</span>
+      <span>Not a Claude home — nothing recognisable at this path.</span>
+    </div>
+  );
+}
+
+function ProfilePill({ profiles, cwd, override, onPick, onManage }: {
+  profiles: ClaudeProfileDto[];
+  cwd: string;
+  override: string | null | undefined;
+  onPick: (id: string | null | undefined) => void;
+  onManage: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc, true);
+    return () => document.removeEventListener("mousedown", onDoc, true);
+  }, [open]);
+
+  const resolved = resolveProfileForCwd(profiles, cwd);
+  // Which profile is *actually* active for this pane:
+  //   override === null        → explicit Default
+  //   override is a string     → that profile (if it still exists)
+  //   override === undefined   → the path-resolved profile (or Default if none)
+  const active: ClaudeProfileDto | null =
+    override === null
+      ? null
+      : typeof override === "string"
+        ? (profiles.find((p) => p.id === override) ?? null)
+        : resolved;
+
+  // Hide the pill entirely when there are no profiles yet — avoids noise for
+  // users who haven't opted into the feature.
+  if (profiles.length === 0) return null;
+
+  const color = active?.color ?? "var(--muted)";
+  const name = active?.name ?? "default";
+
+  return (
+    <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
+      <span
+        className="profile-pill"
+        onClick={() => setOpen((o) => !o)}
+        title={active ? `Claude profile: ${active.name}` : "Claude profile: default (~/.claude)"}
+      >
+        <span className="pdot" style={{ background: color }} />
+        <span className="pname">{name}</span>
+        <span className="pcaret">▾</span>
+      </span>
+      {open && (
+        <div className="profile-dropdown">
+          <div className="profile-dd-head">Profile for this tab</div>
+          {profiles.map((p) => (
+            <div key={p.id} className="profile-dd-item" onClick={() => { setOpen(false); onPick(p.id); }}>
+              <span className="dd-dot" style={{ background: p.color }} />
+              <span>{p.name}</span>
+              {active?.id === p.id && <span className="dd-check">✓</span>}
+            </div>
+          ))}
+          <div className="profile-dd-item" onClick={() => { setOpen(false); onPick(null); }}>
+            <span className="dd-dot default" />
+            <span>Default</span>
+            <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--muted)", fontFamily: '"JetBrains Mono", monospace' }}>~/.claude</span>
+            {active === null && <span className="dd-check">✓</span>}
+          </div>
+          <div className="profile-dd-sep" />
+          <div className="profile-dd-item accent" onClick={() => { setOpen(false); onManage(); }}>Manage profiles…</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type PaneViewProps = {
   tabId: string;
   root: PaneNode;
@@ -1552,6 +2231,7 @@ function PaneView(props: PaneViewProps) {
               cwd={leaf.cwd}
               resumeId={leaf.resumeId}
               continueLatest={leaf.continueLatest}
+              profileOverride={leaf.profileOverride}
               epoch={leaf.epoch}
               visible={tabVisible}
               focused={isActive}
@@ -1618,6 +2298,7 @@ function TerminalView({
   cwd,
   resumeId,
   continueLatest,
+  profileOverride,
   epoch,
   visible,
   focused,
@@ -1633,6 +2314,7 @@ function TerminalView({
   cwd: string;
   resumeId?: string;
   continueLatest?: boolean;
+  profileOverride?: string | null;
   epoch: number;
   visible: boolean;
   focused: boolean;
@@ -1646,6 +2328,11 @@ function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const hoveredLinkRef = useRef<{ uri: string; kind: "url" | "path" } | null>(null);
+  type TermMenu =
+    | { kind: "link"; x: number; y: number; uri: string; linkKind: "url" | "path" }
+    | { kind: "selection"; x: number; y: number; text: string };
+  const [termMenu, setTermMenu] = useState<TermMenu | null>(null);
   const focusedRef = useRef(focused);
   useEffect(() => { focusedRef.current = focused; }, [focused]);
 
@@ -1666,9 +2353,17 @@ function TerminalView({
     term.loadAddon(fit);
     // http(s) links — route through the OS default handler so they land in
     // the user's browser instead of the WKWebView's blocked window.open.
-    term.loadAddon(new WebLinksAddon((_e, uri) => {
-      invoke("open_path", { path: uri }).catch(() => {});
-    }));
+    term.loadAddon(new WebLinksAddon(
+      (e, uri) => {
+        // Only left-click activates — right-click is reserved for the context menu.
+        if (e && (e as MouseEvent).button !== 0) return;
+        invoke("open_path", { path: uri }).catch(() => {});
+      },
+      {
+        hover: (_e: MouseEvent, uri: string) => { hoveredLinkRef.current = { uri, kind: "url" }; },
+        leave: () => { hoveredLinkRef.current = null; },
+      } as any,
+    ));
     // File / folder paths — absolute (`/...`) or home (`~/...`). Clicking
     // opens the path with the OS default app: Finder for directories,
     // associated app for files.
@@ -1692,9 +2387,12 @@ function TerminalView({
               end:   { x: start + p.length, y },
             },
             text: p,
-            activate(_e: MouseEvent, path: string) {
+            activate(e: MouseEvent, path: string) {
+              if (e && e.button !== 0) return;
               invoke("open_path", { path }).catch(() => {});
             },
+            hover(_e: MouseEvent, path: string) { hoveredLinkRef.current = { uri: path, kind: "path" }; },
+            leave() { hoveredLinkRef.current = null; },
           });
         }
         callback(links);
@@ -1713,6 +2411,26 @@ function TerminalView({
     term.onBell(() => onBell(tabId, paneId));
     term.onTitleChange((t) => { if (t) onTitle(tabId, t); });
 
+    // Right-click on a URL/path link → Open/Copy menu.
+    // Right-click on a selection (no link) → Copy / Copy as plain text menu.
+    // Right-click on empty area → default browser menu.
+    const onContextMenu = (e: MouseEvent) => {
+      const link = hoveredLinkRef.current;
+      if (link) {
+        e.preventDefault();
+        e.stopPropagation();
+        setTermMenu({ kind: "link", x: e.clientX, y: e.clientY, uri: link.uri, linkKind: link.kind });
+        return;
+      }
+      const sel = term.getSelection();
+      if (sel && sel.trim().length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        setTermMenu({ kind: "selection", x: e.clientX, y: e.clientY, text: sel });
+      }
+    };
+    wrapRef.current.addEventListener("contextmenu", onContextMenu);
+
     const sessionId = crypto.randomUUID();
     sessionRef.current = sessionId;
 
@@ -1721,6 +2439,13 @@ function TerminalView({
       if (e.key === "Enter" && e.shiftKey) return false;
       // Let our document-capture handler own Cmd/Opt+Backspace.
       if (e.key === "Backspace" && (e.metaKey || e.altKey)) return false;
+      // Cmd+Arrow and Opt+Arrow are translated to readline sequences below.
+      // (Cmd+Opt+Arrow stays with the global handler for pane focus.)
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")
+          && !e.shiftKey && !e.ctrlKey
+          && ((e.metaKey && !e.altKey) || (e.altKey && !e.metaKey))) {
+        return false;
+      }
       return true;
     });
 
@@ -1746,6 +2471,18 @@ function TerminalView({
       if (e.key === "Backspace" && e.altKey && !e.metaKey && !e.ctrlKey) {
         // Opt+Backspace → kill word backwards (Ctrl+W).
         return send("\x17");
+      }
+      // macOS line-editing shortcuts — translate to readline control chars
+      // so Claude Code's input (and any bash-like prompt) obeys them.
+      if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey) {
+        if (e.key === "ArrowLeft")  return send("\x01"); // Cmd+← → Ctrl+A (line start)
+        if (e.key === "ArrowRight") return send("\x05"); // Cmd+→ → Ctrl+E (line end)
+        if (e.key === "ArrowUp")    return send("\x01"); // Cmd+↑ → line start (doc-start analog)
+        if (e.key === "ArrowDown")  return send("\x05"); // Cmd+↓ → line end  (doc-end   analog)
+      }
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        if (e.key === "ArrowLeft")  return send("\x1bb"); // Opt+← → word back (Esc+b)
+        if (e.key === "ArrowRight") return send("\x1bf"); // Opt+→ → word forward (Esc+f)
       }
     };
     document.addEventListener("keydown", onDocKey, true);
@@ -1773,7 +2510,9 @@ function TerminalView({
         // glyph residue there either).
         const ptyCols = Math.max(20, cols - 3);
         try { term.resize(ptyCols, rows); } catch {}
-        await invoke("start_session", { sessionId, agentId, cols: ptyCols, rows, cwd, resumeId: resumeId ?? null, continueLatest: continueLatest ?? false });
+        // profileOverride: undefined → backend resolves from cwd; null → force default ~/.claude; string → use that profile id
+        const overrideArg = profileOverride === undefined ? null : (profileOverride === null ? "__default__" : profileOverride);
+        await invoke("start_session", { sessionId, agentId, cols: ptyCols, rows, cwd, resumeId: resumeId ?? null, continueLatest: continueLatest ?? false, profileOverride: overrideArg });
       } catch (err) {
         term.writeln(`\r\n\x1b[31m[failed to start agent: ${err}]\x1b[0m`);
       }
@@ -1844,6 +2583,7 @@ function TerminalView({
       if (pollTimer != null) window.clearTimeout(pollTimer);
       window.removeEventListener("focus", onWinFocus);
       document.removeEventListener("keydown", onDocKey, true);
+      wrapRef.current?.removeEventListener("contextmenu", onContextMenu);
       unlistenData?.();
       unlistenExit?.();
       unlistenNotify?.();
@@ -1863,11 +2603,110 @@ function TerminalView({
   }, [visible, focused]);
 
   return (
-    <div
-      className="term-wrap"
-      ref={wrapRef}
-      style={{ display: visible ? "block" : "none" }}
-      onClick={() => termRef.current?.focus()}
-    />
+    <>
+      <div
+        className="term-wrap"
+        ref={wrapRef}
+        style={{ display: visible ? "block" : "none" }}
+        onClick={() => termRef.current?.focus()}
+      />
+      {termMenu && (
+        <TerminalContextMenu menu={termMenu} onClose={() => setTermMenu(null)} />
+      )}
+    </>
+  );
+}
+
+/** Normalise terminal-copied text for external pasting (Slack, email, docs, etc).
+ *  - Replaces NBSP with regular space
+ *  - Strips zero-width / BOM chars
+ *  - Trims trailing whitespace per line
+ *  - Detects the minimum leading indent across non-empty lines and removes it
+ *    (kills the 2-3 space gutter Claude prints for code blocks and lists)
+ *  - Collapses runs of 3+ blank lines to a single paragraph break
+ */
+function cleanTerminalText(s: string): string {
+  s = s.replace(/ /g, " ");
+  s = s.replace(/[​-‍﻿]/g, "");
+  const lines = s.split("\n").map((l) => l.replace(/\s+$/, ""));
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  if (nonEmpty.length > 0) {
+    const minIndent = nonEmpty.reduce((m, l) => {
+      const leading = l.match(/^(\s*)/)?.[1].length ?? 0;
+      return Math.min(m, leading);
+    }, Number.POSITIVE_INFINITY);
+    if (Number.isFinite(minIndent) && minIndent > 0) {
+      const pad = " ".repeat(minIndent);
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith(pad)) lines[i] = lines[i].slice(minIndent);
+      }
+    }
+  }
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+type TermMenuData =
+  | { kind: "link"; x: number; y: number; uri: string; linkKind: "url" | "path" }
+  | { kind: "selection"; x: number; y: number; text: string };
+
+function TerminalContextMenu({ menu, onClose }: { menu: TermMenuData; onClose: () => void }) {
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest(".link-ctx-menu")) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onDoc, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [onClose]);
+
+  const writeClipboard = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); } catch {}
+    onClose();
+  };
+
+  const items: { label: string; onClick: () => void }[] = [];
+  let preview = "";
+
+  if (menu.kind === "link") {
+    preview = menu.uri;
+    items.push({
+      label: `Open ${menu.linkKind === "url" ? "URL" : "path"}`,
+      onClick: () => { invoke("open_path", { path: menu.uri }).catch(() => {}); onClose(); },
+    });
+    items.push({
+      label: `Copy ${menu.linkKind === "url" ? "URL" : "path"}`,
+      onClick: () => writeClipboard(menu.uri),
+    });
+  } else {
+    // Selection menu — show a short preview of the selected text.
+    const flat = menu.text.replace(/\s+/g, " ").trim();
+    preview = flat.length > 60 ? flat.slice(0, 57) + "…" : flat;
+    items.push({
+      label: "Copy",
+      onClick: () => writeClipboard(menu.text),
+    });
+    items.push({
+      label: "Copy as plain text",
+      onClick: () => writeClipboard(cleanTerminalText(menu.text)),
+    });
+  }
+
+  // Clamp to viewport so the menu never falls off the edge.
+  const W = 220;
+  const H = 40 + items.length * 30 + (preview ? 28 : 0);
+  const px = Math.min(menu.x, window.innerWidth - W - 8);
+  const py = Math.min(menu.y, window.innerHeight - H - 8);
+
+  return (
+    <div className="link-ctx-menu" style={{ left: px, top: py, width: W }}>
+      {preview && <div className="link-ctx-preview" title={menu.kind === "link" ? menu.uri : menu.text}>{preview}</div>}
+      {items.map((it, i) => (
+        <button key={i} className="link-ctx-item" onClick={it.onClick}>{it.label}</button>
+      ))}
+    </div>
   );
 }

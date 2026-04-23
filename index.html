@@ -139,19 +139,135 @@
       .project-dot { width: 6px; height: 6px; border-radius: 50%; background: #ff8a4c; display: inline-block; }
 
       .settings { position: relative; display: flex; gap: 6px; align-items: center; }
-      .settings-panel { position: absolute; right: 0; top: 110%; width: 240px; background: var(--elev); border: 1px solid var(--border); border-radius: 8px; padding: 10px; z-index: 20; box-shadow: 0 8px 28px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 10px; }
-      .shortcuts-panel { width: 300px; }
-      .shortcuts-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
-      .shortcuts-list { display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 6px; align-items: center; font-size: 12px; }
-      .shortcut-row { display: contents; }
-      .shortcut-keys { font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; color: var(--fg); white-space: nowrap; justify-self: start; font-size: 11px; }
-      .shortcut-label { color: var(--muted); justify-self: start; }
-      .settings-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
+
+      /* Settings modal */
+      .settings-modal-card { width: 50vw !important; height: 70vh !important; max-width: none !important; max-height: none !important; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+      .settings-modal-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+      .settings-modal-header .picker-brand { font-weight: 600; letter-spacing: 0.4px; }
+      .settings-modal-body { flex: 1 1 auto; display: grid; grid-template-columns: 200px 1fr; min-height: 0; }
+      .settings-sidebar { background: color-mix(in srgb, var(--bg) 50%, var(--elev)); border-right: 1px solid var(--border); padding: 14px 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+      .settings-nav-heading { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; padding: 10px 12px 4px; }
+      .settings-nav-heading:first-child { padding-top: 4px; }
+      .settings-nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 6px; color: var(--muted); font-size: 13px; cursor: pointer; background: transparent; border: 1px solid transparent; text-align: left; }
+      .settings-nav-item:hover { background: var(--elev-hi); color: var(--fg); }
+      .settings-nav-item.active { background: var(--active-bg); color: var(--fg); border-color: var(--active-border); }
+      .settings-content { padding: 22px 26px; overflow-y: auto; overflow-x: hidden; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+      .settings-section-title { font-size: 16px; font-weight: 600; color: var(--fg); margin: 0; }
+      .settings-section-sub { font-size: 12px; color: var(--muted); margin: -10px 0 4px; line-height: 1.5; max-width: 540px; }
+      .settings-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--muted); padding: 8px 0; }
       .settings-row span { color: var(--fg); }
       .seg { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-      .seg button { border: none; border-radius: 0; padding: 3px 10px; background: transparent; color: var(--muted); }
+      .seg button { border: none; border-radius: 0; padding: 4px 12px; background: transparent; color: var(--muted); font-size: 12px; }
       .seg button.on { background: var(--active-bg); color: var(--fg); }
       .linkish { background: transparent; border: none; color: #ff8a4c; padding: 0; cursor: pointer; font: inherit; }
+
+      .shortcuts-list { display: grid; grid-template-columns: max-content 1fr; column-gap: 16px; row-gap: 10px; align-items: center; font-size: 13px; }
+      .shortcut-row { display: contents; }
+      .shortcut-keys { display: inline-flex; align-items: center; gap: 4px; justify-self: start; }
+      .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; background: linear-gradient(180deg, var(--elev-hi), var(--elev)); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; color: var(--fg); font-family: "JetBrains Mono", ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 500; line-height: 1; box-shadow: 0 1px 0 rgba(0,0,0,0.18); }
+      .kbd svg { display: block; }
+      .kbd-plus { color: var(--muted); font-size: 11px; padding: 0 1px; }
+      .shortcut-label { color: var(--muted); justify-self: start; }
+
+      /* Claude Profiles section */
+      .profiles-list { display: flex; flex-direction: column; gap: 8px; }
+      .profile-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 12px 14px;
+        background: var(--elev);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        min-width: 0;
+      }
+      .profile-avatar { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; font-family: "JetBrains Mono", monospace; font-size: 14px; font-weight: 700; color: #1a1a0f; }
+      .profile-name-wrap { flex: 1 1 auto; min-width: 90px; display: flex; flex-direction: column; gap: 5px; }
+      .profile-name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .profile-name { font-size: 13.5px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-tag { flex: 0 0 auto; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--muted); padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; text-transform: uppercase; letter-spacing: 0.5px; }
+      .profile-folders { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+      .folder-chip { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); padding: 2px 7px; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; display: inline-flex; align-items: center; gap: 5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .folder-chip .x { color: var(--tab-close); cursor: pointer; font-size: 12px; line-height: 1; }
+      .folder-chip .x:hover { color: var(--fg); }
+
+      /* Folder list popover trigger (profile row) */
+      .folders-trigger { position: relative; display: inline-block; font-size: 11.5px; color: var(--muted); border-bottom: 1px dashed var(--border); cursor: help; align-self: flex-start; outline: none; }
+      .folders-trigger:hover, .folders-trigger:focus-visible { color: var(--fg); border-bottom-color: var(--fg); }
+      .folders-popover {
+        position: absolute; top: calc(100% + 6px); left: 0;
+        min-width: 240px; max-width: 420px;
+        background: var(--elev); border: 1px solid var(--border); border-radius: 8px;
+        padding: 6px;
+        display: none; flex-direction: column; gap: 2px;
+        box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+        z-index: 20;
+      }
+      .folders-trigger:hover .folders-popover,
+      .folders-trigger:focus-visible .folders-popover,
+      .folders-trigger:focus-within .folders-popover { display: flex; }
+      .folders-popover-item {
+        font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+        font-size: 11.5px; color: var(--fg); padding: 4px 8px; border-radius: 4px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .folders-popover-item:hover { background: var(--elev-hi); }
+      .profile-email { flex: 0 1 180px; max-width: 180px; min-width: 0; text-align: right; font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; }
+      .profile-email .em { color: var(--fg); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-actions { flex: 0 0 auto; display: flex; gap: 4px; }
+      .profile-actions .icon-btn { width: 28px; height: 28px; }
+      .profile-add { margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; border: 1.5px dashed var(--border); border-radius: 10px; color: var(--muted); font-size: 13px; cursor: pointer; background: transparent; transition: color .15s, border-color .15s; }
+      .profile-add:hover { color: #ff8a4c; border-color: #ff8a4c; }
+
+      /* Profile dialog (add/edit) */
+      .profile-dialog { width: 440px; max-width: 100%; padding: 20px 22px 18px; display: flex; flex-direction: column; gap: 14px; }
+      .profile-dialog h3 { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
+      .profile-field { display: flex; flex-direction: column; gap: 6px; }
+      .profile-field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+      .profile-field input[type="text"] { padding: 7px 10px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 13px; outline: none; }
+      .profile-field input[type="text"]:focus { border-color: #ff8a4c; }
+      .folder-picker-btn { padding: 8px 10px; background: var(--bg); color: var(--muted); border: 1px dashed var(--border); border-radius: 6px; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+      .folder-picker-btn:hover { border-color: #ff8a4c; color: #ff8a4c; }
+      .color-swatches { display: flex; gap: 8px; }
+      .color-swatch { width: 24px; height: 24px; border-radius: 6px; cursor: pointer; border: 2px solid transparent; }
+      .color-swatch.on { border-color: var(--fg); }
+      .profile-advanced { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+      .profile-advanced > summary { cursor: pointer; padding: 9px 12px; font-size: 12px; color: var(--muted); list-style: none; outline: none; user-select: none; display: flex; align-items: center; gap: 8px; }
+      .profile-advanced > summary::-webkit-details-marker { display: none; }
+      .profile-advanced > summary::before {
+        content: "";
+        display: inline-block;
+        width: 0; height: 0;
+        border-left: 6px solid currentColor;
+        border-top: 5px solid transparent;
+        border-bottom: 5px solid transparent;
+        margin-right: 2px;
+        transition: transform .15s ease;
+        transform-origin: 25% 50%;
+      }
+      .profile-advanced[open] > summary::before { transform: rotate(90deg); }
+      .profile-advanced[open] > summary { color: var(--fg); border-bottom: 1px solid var(--border); }
+      .profile-advanced > .profile-field { padding: 10px 12px 12px; }
+      .profile-dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 14px; }
+      .btn-primary { background: #ff8a4c; color: #1a1a0f; border: 1px solid #ff8a4c; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; font-size: 12px; }
+      .btn-primary:hover { background: #ffa066; border-color: #ffa066; }
+      .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+      /* Profile pill on Claude tabs */
+      .profile-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px 1px 4px; border-radius: 999px; font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.03em; background: var(--elev); border: 1px solid var(--border); color: var(--fg); cursor: pointer; max-width: 110px; }
+      .profile-pill:hover { background: var(--elev-hi); }
+      .profile-pill .pdot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; }
+      .profile-pill .pname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .profile-pill .pcaret { font-size: 7px; opacity: 0.6; margin-left: 1px; }
+      .profile-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 200px; background: var(--elev); border: 1px solid var(--border); border-radius: 8px; padding: 4px; z-index: 30; box-shadow: 0 12px 30px rgba(0,0,0,0.45); font-size: 12.5px; }
+      .profile-dd-head { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; padding: 6px 10px 4px; }
+      .profile-dd-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 5px; cursor: pointer; color: var(--fg); }
+      .profile-dd-item:hover { background: var(--elev-hi); }
+      .profile-dd-item .dd-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+      .profile-dd-item .dd-dot.default { background: var(--muted); }
+      .profile-dd-item .dd-check { margin-left: auto; color: #ff8a4c; font-size: 12px; }
+      .profile-dd-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+      .profile-dd-item.accent { color: #ff8a4c; }
 
       .picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; backdrop-filter: blur(3px); }
       .picker-head { display: flex; align-items: center; justify-content: space-between; }
@@ -235,6 +351,27 @@
       .whatsnew-body a:hover { text-decoration: underline; }
 
       .update-toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 120; background: var(--elev); color: var(--fg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; font-size: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+
+      /* Right-click menu for terminal links */
+      .link-ctx-menu {
+        position: fixed; z-index: 200; width: 200px;
+        background: var(--elev); border: 1px solid var(--border); border-radius: 8px;
+        padding: 4px; display: flex; flex-direction: column; gap: 2px;
+        box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+        font-size: 12.5px;
+      }
+      .link-ctx-preview {
+        font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+        font-size: 10.5px; color: var(--muted); padding: 6px 8px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border-bottom: 1px solid var(--border);
+      }
+      .link-ctx-item {
+        background: transparent; border: none; color: var(--fg);
+        text-align: left; padding: 6px 10px; border-radius: 5px;
+        font: inherit; cursor: pointer;
+      }
+      .link-ctx-item:hover { background: var(--elev-hi); }
     </style>
   </head>
   <body>

@@ -136,9 +136,14 @@ fn encode_path_for_claude(p: &Path) -> String {
     p.to_string_lossy().replace('/', "-")
 }
 
-fn claude_sessions_dir(cwd: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(home.join(".claude").join("projects").join(encode_path_for_claude(cwd)))
+/// Resolve the Claude session directory for `cwd`, optionally under a profile's
+/// `CLAUDE_CONFIG_DIR` (overrides the default `~/.claude`).
+fn claude_sessions_dir_in(cwd: &Path, config_dir: Option<&Path>) -> Option<PathBuf> {
+    let base = match config_dir {
+        Some(p) => p.to_path_buf(),
+        None => dirs::home_dir()?.join(".claude"),
+    };
+    Some(base.join("projects").join(encode_path_for_claude(cwd)))
 }
 
 
@@ -204,8 +209,8 @@ fn extract_text(msg: Option<&serde_json::Value>) -> Option<String> {
     None
 }
 
-pub fn list_claude_sessions(cwd: &Path) -> Vec<SessionSummary> {
-    let dir = match claude_sessions_dir(cwd) { Some(d) => d, None => return vec![] };
+pub fn list_claude_sessions(cwd: &Path, config_dir: Option<&Path>) -> Vec<SessionSummary> {
+    let dir = match claude_sessions_dir_in(cwd, config_dir) { Some(d) => d, None => return vec![] };
     let read = match fs::read_dir(&dir) { Ok(r) => r, Err(_) => return vec![] };
 
     // Collect file paths first so we can do the heavy work in parallel threads.
@@ -246,10 +251,10 @@ pub fn list_claude_sessions(cwd: &Path) -> Vec<SessionSummary> {
     out
 }
 
-pub fn search_claude_sessions(cwd: &Path, query: &str) -> Vec<SessionSummary> {
+pub fn search_claude_sessions(cwd: &Path, query: &str, config_dir: Option<&Path>) -> Vec<SessionSummary> {
     let needle = query.trim().to_ascii_lowercase();
-    if needle.is_empty() { return list_claude_sessions(cwd); }
-    let dir = match claude_sessions_dir(cwd) { Some(d) => d, None => return vec![] };
+    if needle.is_empty() { return list_claude_sessions(cwd, config_dir); }
+    let dir = match claude_sessions_dir_in(cwd, config_dir) { Some(d) => d, None => return vec![] };
     let read = match fs::read_dir(&dir) { Ok(r) => r, Err(_) => return vec![] };
 
     let mut paths: Vec<(String, PathBuf, u64, u64)> = vec![];
@@ -296,8 +301,8 @@ fn scan_for_needle(path: &Path, needle_lower: &str, modified_ms: u64) -> Option<
     Some(info)
 }
 
-pub fn get_claude_session(cwd: &Path, session_id: &str) -> Option<SessionDetail> {
-    let dir = claude_sessions_dir(cwd)?;
+pub fn get_claude_session(cwd: &Path, session_id: &str, config_dir: Option<&Path>) -> Option<SessionDetail> {
+    let dir = claude_sessions_dir_in(cwd, config_dir)?;
     let path = dir.join(format!("{session_id}.jsonl"));
     let content = fs::read_to_string(&path).ok()?;
     let modified_ms = file_modified_ms(&path);
