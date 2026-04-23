@@ -1,6 +1,6 @@
 [package]
 name = "vector"
-version = "0.2.0"
+version = "0.2.1"
 description = "Vector — agent-first terminal"
 edition = "2021"
 
@@ -23,6 +23,7 @@ dirs = "5"
 toml = "0.8"
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]

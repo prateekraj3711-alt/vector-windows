@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
@@ -429,7 +429,10 @@ export default function App() {
   useEffect(() => { reloadClaudeProfiles(); }, [reloadClaudeProfiles]);
   type UsageBucket = { utilization: number; resetsAt?: string | null };
   type ClaudeUsage = { fiveHour?: UsageBucket | null; sevenDay?: UsageBucket | null; sevenDaySonnet?: UsageBucket | null; sevenDayOpus?: UsageBucket | null };
-  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
+  // Usage is scoped per Claude profile — each profile has its own OAuth token
+  // and its own 5-hour / 7-day buckets. Key is the profile id, or "__default__"
+  // for the top-level ~/.claude login.
+  const [usageByProfile, setUsageByProfile] = useState<Record<string, ClaudeUsage>>({});
   const [usageOpen, setUsageOpen] = useState(false);
   const leafStartedMs = useRef<Record<string, number>>({});
   const markLeafStarted = useCallback((leafId: string, epoch: number) => {
@@ -810,8 +813,19 @@ export default function App() {
   const xtermTheme = theme === "light" ? lightTheme : darkTheme;
 
   const ctxAgentId = activeLeaf?.agentId ?? "";
+  // Resolve which Claude profile the active pane is using. Mirrors ProfilePill.
+  const ctxProfileKey: string | null = useMemo(() => {
+    if (ctxAgentId !== "claude") return null;
+    const override = activeLeaf?.profileOverride;
+    if (override === null) return "__default__";
+    if (typeof override === "string") {
+      return claudeProfiles.some((p) => p.id === override) ? override : "__default__";
+    }
+    const resolved = resolveProfileForCwd(claudeProfiles, activeLeaf?.cwd ?? "");
+    return resolved?.id ?? "__default__";
+  }, [ctxAgentId, activeLeaf?.profileOverride, activeLeaf?.cwd, claudeProfiles]);
   useEffect(() => {
-    if (ctxAgentId !== "claude") { setClaudeUsage(null); return; }
+    if (!ctxProfileKey) return;
     let cancelled = false;
     let intervalId: number | null = null;
     let retryId: number | null = null;
@@ -820,11 +834,11 @@ export default function App() {
     let haveData = false;
 
     const tick = () => {
-      invoke<ClaudeUsage | null>("get_claude_usage")
+      invoke<ClaudeUsage | null>("get_claude_usage", { profileId: ctxProfileKey })
         .then((u) => {
           if (cancelled) return;
           if (u) {
-            setClaudeUsage(u);
+            setUsageByProfile((prev) => ({ ...prev, [ctxProfileKey]: u }));
             haveData = true;
             retryDelay = 15_000;
             // First success → switch from backoff to steady 5-min cadence.
@@ -850,7 +864,8 @@ export default function App() {
       if (intervalId != null) window.clearInterval(intervalId);
       if (retryId != null) window.clearTimeout(retryId);
     };
-  }, [ctxAgentId]);
+  }, [ctxProfileKey]);
+  const claudeUsage = ctxProfileKey ? (usageByProfile[ctxProfileKey] ?? null) : null;
   const fiveHour = claudeUsage?.fiveHour ?? null;
   const ctxPct = fiveHour ? Math.round(Math.min(100, Math.max(0, fiveHour.utilization))) : 0;
   const ctxLevel = ctxPct >= 85 ? "crit" : ctxPct >= 60 ? "warn" : "ok";
@@ -1141,11 +1156,25 @@ export default function App() {
         <div className="picker-overlay" onClick={() => setUsageOpen(false)}>
           <div className="picker-card usage-card" onClick={(e) => e.stopPropagation()}>
             <div className="picker-head">
-              <div className="picker-brand"><VectorMark size={14} /> Claude usage</div>
+              <div className="picker-brand">
+                <VectorMark size={14} /> Claude usage
+                {(() => {
+                  if (!ctxProfileKey) return null;
+                  const p = ctxProfileKey === "__default__" ? null : claudeProfiles.find((q) => q.id === ctxProfileKey);
+                  const name = p?.name ?? "default";
+                  return <span className="usage-profile-tag" style={p ? { background: p.color } : undefined}>{name}</span>;
+                })()}
+              </div>
               <div className="usage-head-actions">
                 <button
                   className="icon-btn"
-                  onClick={() => { invoke<ClaudeUsage | null>("get_claude_usage").then((u) => { if (u) setClaudeUsage(u); }).catch(() => {}); }}
+                  onClick={() => {
+                    if (!ctxProfileKey) return;
+                    const key = ctxProfileKey;
+                    invoke<ClaudeUsage | null>("get_claude_usage", { profileId: key })
+                      .then((u) => { if (u) setUsageByProfile((prev) => ({ ...prev, [key]: u })); })
+                      .catch(() => {});
+                  }}
                   aria-label="Refresh"
                   title="Refresh"
                 >↻</button>

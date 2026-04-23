@@ -507,8 +507,8 @@ async fn supported_resume_agents() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn get_claude_usage() -> Result<Option<usage::ClaudeUsage>, String> {
-    usage::fetch_claude_usage().await
+async fn get_claude_usage(profile_id: Option<String>) -> Result<Option<usage::ClaudeUsage>, String> {
+    usage::fetch_claude_usage(profile_id.as_deref()).await
 }
 
 /// Set the macOS Dock badge. 0 clears it. No-op on other platforms.

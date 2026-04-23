@@ -64,6 +64,7 @@
       .ctx-warn .ctx-num { color: #ffb347; }
       .ctx-crit .ctx-num { color: #ff5a5a; font-weight: 600; }
       .usage-card { width: min(520px, 92vw); }
+      .usage-profile-tag { margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-size: 10px; font-family: "JetBrains Mono", monospace; color: #1a1a0f; background: var(--border); letter-spacing: 0.03em; }
       .usage-head-actions { display: flex; gap: 8px; align-items: center; }
       .usage-body { display: flex; flex-direction: column; gap: 16px; margin-top: 14px; }
       .usage-row { display: flex; flex-direction: column; gap: 6px; }
@@ -90,6 +91,7 @@
       .shell.vertical .tab { max-width: none; }
 
       .tab { display: flex; gap: 6px; align-items: center; padding: 2px 6px 2px 4px; background: var(--elev); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; user-select: none; max-width: 180px; font-size: 11px; line-height: 1.2; }
+      .shell.horizontal .tab.active { max-width: 300px; }
       .tab:hover { background: var(--elev-hi); }
       .tab.active { background: var(--active-bg); color: var(--fg); border-color: var(--active-border); }
       .tab.bell { box-shadow: 0 0 0 2px #d97706; }
