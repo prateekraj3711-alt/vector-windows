@@ -788,20 +788,6 @@ export default function App() {
       : t));
   }, []);
 
-  /** Replace the active pane's agent in-place. Bumps epoch to trigger a TerminalView remount. */
-  const replaceActivePaneAgent = useCallback((nextAgentId: string) => {
-    setTabs((prev) => prev.map((t) => t.id !== activeIdRef.current ? t : ({
-      ...t,
-      root: mapLeaf(t.root, t.activePaneId, (leaf) => ({
-        ...leaf,
-        agentId: nextAgentId,
-        resumeId: undefined,
-        continueLatest: undefined,
-        epoch: leaf.epoch + 1,
-      })),
-    })));
-  }, []);
-
   const setSplitRatio = useCallback((tabId: string, splitId: string, ratio: number) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, root: updateRatio(t.root, splitId, ratio) } : t));
   }, []);
@@ -1461,7 +1447,7 @@ export default function App() {
       {switcherOpen && (
         <AgentSwitcher
           agents={agents}
-          onPick={(id) => replaceActivePaneAgent(id)}
+          onPick={(id) => changeActiveAgent(id)}
           onClose={() => setSwitcherOpen(false)}
         />
       )}
