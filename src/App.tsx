@@ -628,6 +628,9 @@ export default function App() {
     } catch {}
   }, [customTheme]);
   useEffect(() => { try { localStorage.setItem("vector.transparency", String(transparency)); } catch {} }, [transparency]);
+  useEffect(() => {
+    document.documentElement.style.setProperty("--window-alpha", String(1 - transparency));
+  }, [transparency]);
   useEffect(() => { try { localStorage.setItem("vector.orientation", orientation); } catch {} }, [orientation]);
 
   useEffect(() => {
@@ -929,9 +932,12 @@ export default function App() {
   const activeTab = tabs.find((t) => t.id === activeId);
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
   const xtermTheme: ITheme = useMemo(() => {
-    if (themeName === "custom" && customTheme) return customTheme;
-    return themeName === "light" ? lightTheme : darkTheme;
-  }, [themeName, customTheme]);
+    const base = themeName === "custom" && customTheme
+      ? customTheme
+      : (themeName === "light" ? lightTheme : darkTheme);
+    if (transparency <= 0) return base;
+    return { ...base, background: "rgba(0,0,0,0)" };
+  }, [themeName, customTheme, transparency]);
 
   const ctxAgentId = activeLeaf?.agentId ?? "";
   // Resolve which Claude profile the active pane is using. Mirrors ProfilePill.
@@ -2761,6 +2767,7 @@ function TerminalView({
       cursorBlink: true,
       theme,
       allowProposedApi: true,
+      allowTransparency: true,
       scrollback: 10000,
     });
     const fit = new FitAddon();

@@ -5201,6 +5201,7 @@ dependencies = [
  "tauri-plugin-updater",
  "toml 0.8.2",
  "uuid",
+ "window-vibrancy",
 ]
 
 [[package]]

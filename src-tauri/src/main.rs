@@ -569,6 +569,19 @@ fn main() {
         .setup(|app| {
             let _ = app.get_webview_window("main");
 
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = apply_vibrancy(
+                        &win,
+                        NSVisualEffectMaterial::HudWindow,
+                        Some(NSVisualEffectState::Active),
+                        None,
+                    );
+                }
+            }
+
             // Native menu bar. Replacing the default menu loses macOS's built-in
             // items, so we rebuild App / Edit / View / Window / Help explicitly.
             let about_meta = AboutMetadataBuilder::new()
