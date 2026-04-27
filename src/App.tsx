@@ -2589,7 +2589,7 @@ function PaneView(props: PaneViewProps) {
                 onDragEnd={() => onPaneDragEnd()}
               />
             )}
-            <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0" }}>
+            <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
               <TerminalView
                 key={`${leaf.id}-${leaf.epoch}`}
                 tabId={tabId}
