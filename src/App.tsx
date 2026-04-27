@@ -881,6 +881,21 @@ export default function App() {
         setSwitcherOpen((o) => !o);
         return;
       }
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setFontSize((s) => clamp(s + 1, 8, 40));
+        return;
+      }
+      if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        setFontSize((s) => clamp(s - 1, 8, 40));
+        return;
+      }
+      if (e.key === "0") {
+        e.preventDefault();
+        setFontSize(13);
+        return;
+      }
       if (e.key === "t" && !e.shiftKey) { e.preventDefault(); openPickerForNewTab(); }
       else if (e.key === "w" && !e.shiftKey) {
         e.preventDefault();
@@ -1422,6 +1437,14 @@ export default function App() {
           onSection={setSettingsSection}
           themeName={themeName}
           onThemeName={setThemeName}
+          fontFamily={fontFamily}
+          onFontFamily={setFontFamily}
+          fontSize={fontSize}
+          onFontSize={setFontSize}
+          customTheme={customTheme}
+          onCustomTheme={setCustomTheme}
+          transparency={transparency}
+          onTransparency={setTransparency}
           orientation={orientation}
           onOrientation={setOrientation}
           profiles={claudeProfiles}
@@ -1787,6 +1810,14 @@ function SettingsModal({
   onSection,
   themeName,
   onThemeName,
+  fontFamily,
+  onFontFamily,
+  fontSize,
+  onFontSize,
+  customTheme,
+  onCustomTheme,
+  transparency,
+  onTransparency,
   orientation,
   onOrientation,
   profiles,
@@ -1797,12 +1828,23 @@ function SettingsModal({
   onSection: (s: SettingsSection) => void;
   themeName: "dark" | "light" | "custom";
   onThemeName: (t: "dark" | "light" | "custom") => void;
+  fontFamily: string;
+  onFontFamily: (v: string) => void;
+  fontSize: number;
+  onFontSize: (v: number) => void;
+  customTheme: ITheme | null;
+  onCustomTheme: (v: ITheme | null) => void;
+  transparency: number;
+  onTransparency: (v: number) => void;
   orientation: Orientation;
   onOrientation: (o: Orientation) => void;
   profiles: ClaudeProfileDto[];
   onProfilesChanged: () => void | Promise<void>;
   onClose: () => void;
 }) {
+  const [customThemeDraft, setCustomThemeDraft] = useState<string>(() =>
+    customTheme ? JSON.stringify(customTheme, null, 2) : ""
+  );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); }
@@ -1848,6 +1890,7 @@ function SettingsModal({
                   <div className="seg">
                     <button className={themeName === "dark" ? "on" : ""} onClick={() => onThemeName("dark")}>Dark</button>
                     <button className={themeName === "light" ? "on" : ""} onClick={() => onThemeName("light")}>Light</button>
+                    <button className={themeName === "custom" ? "on" : ""} onClick={() => onThemeName("custom")}>Custom</button>
                   </div>
                 </div>
                 <div className="settings-row">
@@ -1855,6 +1898,62 @@ function SettingsModal({
                   <div className="seg">
                     <button className={orientation === "horizontal" ? "on" : ""} onClick={() => onOrientation("horizontal")}>Top</button>
                     <button className={orientation === "vertical" ? "on" : ""} onClick={() => onOrientation("vertical")}>Side</button>
+                  </div>
+                </div>
+                <div className="settings-row">
+                  <span>Font family</span>
+                  <input
+                    className="settings-input"
+                    value={fontFamily}
+                    onChange={(e) => onFontFamily(e.target.value)}
+                    placeholder={DEFAULT_FONT_FAMILY}
+                  />
+                </div>
+                <div className="settings-row">
+                  <span>Font size</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="number" min={8} max={40} step={1}
+                      className="settings-input settings-input-sm"
+                      value={fontSize}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        onFontSize(Number.isFinite(n) ? clamp(n, 8, 40) : 13);
+                      }}
+                    />
+                    <span className="settings-hint">⌘+ / ⌘− / ⌘0</span>
+                  </div>
+                </div>
+                {themeName === "custom" && (
+                  <div className="settings-row settings-row-col">
+                    <span>Custom theme (xterm ITheme JSON)</span>
+                    <textarea
+                      className="settings-textarea"
+                      rows={10}
+                      value={customThemeDraft}
+                      onChange={(e) => setCustomThemeDraft(e.target.value)}
+                      onBlur={() => {
+                        const trimmed = customThemeDraft.trim();
+                        if (trimmed === "") { onCustomTheme(null); return; }
+                        try {
+                          const parsed = JSON.parse(trimmed) as ITheme;
+                          onCustomTheme(parsed);
+                        } catch { /* keep draft, don't clobber */ }
+                      }}
+                      placeholder='{"background":"#0b0b0f","foreground":"#e6e6e6"}'
+                    />
+                    <div className="settings-hint">Applied on blur. Invalid JSON is ignored (draft preserved).</div>
+                  </div>
+                )}
+                <div className="settings-row">
+                  <span>Transparency</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="range" min={0} max={1} step={0.05}
+                      value={transparency}
+                      onChange={(e) => onTransparency(Number(e.target.value))}
+                    />
+                    <span className="settings-hint">{Math.round(transparency * 100)}%</span>
                   </div>
                 </div>
               </>
@@ -1877,6 +1976,10 @@ function SettingsModal({
                   <Shortcut keys={["ctrl", "shift", "Tab"]} label="Previous tab" />
                   <Shortcut keys={["shift", "enter"]} label="Multi-line input (Claude Code)" />
                   <Shortcut keys={["cmd", ","]} label="Open settings" />
+                  <Shortcut keys={["cmd", "+"]} label="Zoom in" />
+                  <Shortcut keys={["cmd", "−"]} label="Zoom out" />
+                  <Shortcut keys={["cmd", "0"]} label="Reset zoom" />
+                  <Shortcut keys={["cmd", "k"]} label="Switch agent" />
                 </div>
               </>
             )}
