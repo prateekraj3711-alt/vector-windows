@@ -436,13 +436,6 @@ export default function App() {
       return raw ? (JSON.parse(raw) as ITheme) : null;
     } catch { return null; }
   });
-  const [transparency, setTransparency] = useState<number>(() => {
-    try {
-      const raw = localStorage.getItem("vector.transparency");
-      const n = raw ? Number(raw) : NaN;
-      return Number.isFinite(n) ? clamp(n, 0, 1) : 0;
-    } catch { return 0; }
-  });
   const [orientation, setOrientation] = useState<Orientation>(() => loadPref<Orientation>("vector.orientation", "horizontal"));
   const [bellTabs, setBellTabs] = useState<Set<string>>(new Set());
   // Key is paneId, not tabId. The tab header reads the active pane's entry.
@@ -627,10 +620,6 @@ export default function App() {
       else localStorage.removeItem("vector.themeCustom");
     } catch {}
   }, [customTheme]);
-  useEffect(() => { try { localStorage.setItem("vector.transparency", String(transparency)); } catch {} }, [transparency]);
-  useEffect(() => {
-    document.documentElement.style.setProperty("--window-alpha", String(1 - transparency));
-  }, [transparency]);
   useEffect(() => { try { localStorage.setItem("vector.orientation", orientation); } catch {} }, [orientation]);
 
   useEffect(() => {
@@ -918,12 +907,9 @@ export default function App() {
   const activeTab = tabs.find((t) => t.id === activeId);
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
   const xtermTheme: ITheme = useMemo(() => {
-    const base = themeName === "custom" && customTheme
-      ? customTheme
-      : (themeName === "light" ? lightTheme : darkTheme);
-    if (transparency <= 0) return base;
-    return { ...base, background: "rgba(0,0,0,0)" };
-  }, [themeName, customTheme, transparency]);
+    if (themeName === "custom" && customTheme) return customTheme;
+    return themeName === "light" ? lightTheme : darkTheme;
+  }, [themeName, customTheme]);
 
   const ctxAgentId = activeLeaf?.agentId ?? "";
   // Resolve which Claude profile the active pane is using. Mirrors ProfilePill.
@@ -1435,8 +1421,6 @@ export default function App() {
           onFontSize={setFontSize}
           customTheme={customTheme}
           onCustomTheme={setCustomTheme}
-          transparency={transparency}
-          onTransparency={setTransparency}
           orientation={orientation}
           onOrientation={setOrientation}
           profiles={claudeProfiles}
@@ -1808,8 +1792,6 @@ function SettingsModal({
   onFontSize,
   customTheme,
   onCustomTheme,
-  transparency,
-  onTransparency,
   orientation,
   onOrientation,
   profiles,
@@ -1826,8 +1808,6 @@ function SettingsModal({
   onFontSize: (v: number) => void;
   customTheme: ITheme | null;
   onCustomTheme: (v: ITheme | null) => void;
-  transparency: number;
-  onTransparency: (v: number) => void;
   orientation: Orientation;
   onOrientation: (o: Orientation) => void;
   profiles: ClaudeProfileDto[];
@@ -1913,7 +1893,6 @@ function SettingsModal({
                         onFontSize(Number.isFinite(n) ? clamp(n, 8, 40) : 13);
                       }}
                     />
-                    <span className="settings-hint">⌘+ / ⌘− / ⌘0</span>
                   </div>
                 </div>
                 {themeName === "custom" && (
@@ -1937,17 +1916,6 @@ function SettingsModal({
                     <div className="settings-hint">Applied on blur. Invalid JSON is ignored (draft preserved).</div>
                   </div>
                 )}
-                <div className="settings-row">
-                  <span>Transparency</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="range" min={0} max={1} step={0.05}
-                      value={transparency}
-                      onChange={(e) => onTransparency(Number(e.target.value))}
-                    />
-                    <span className="settings-hint">{Math.round(transparency * 100)}%</span>
-                  </div>
-                </div>
               </>
             )}
             {section === "shortcuts" && (
@@ -2374,7 +2342,7 @@ function AgentSwitcher({
 
   const entries = useMemo<{ id: string; label: string }[]>(() => [
     { id: "__shell__", label: "shell" },
-    ...agents.map((a) => ({ id: a.id, label: a.label })),
+    ...agents.filter((a) => a.available).map((a) => ({ id: a.id, label: a.label })),
   ], [agents]);
 
   const q = query.trim().toLowerCase();
@@ -2753,7 +2721,6 @@ function TerminalView({
       cursorBlink: true,
       theme,
       allowProposedApi: true,
-      allowTransparency: true,
       scrollback: 10000,
     });
     const fit = new FitAddon();
