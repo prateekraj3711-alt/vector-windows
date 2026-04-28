@@ -58,24 +58,9 @@ export function PreviewPane(props: PreviewLeafProps) {
     void load();
   }, [load, reloadKey]);
 
-  const fileName = filePath.split("/").pop() ?? filePath;
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff" }}>
-      <div style={{
-        padding: "6px 12px",
-        borderBottom: "1px solid #333",
-        fontSize: 12,
-        color: "#aaa",
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-      }}>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-          {fileName}{jumpLine ? `:${jumpLine}${jumpCol ? `:${jumpCol}` : ""}` : ""}
-        </span>
-      </div>
-      <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff" }}>
+      <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
         {state.status === "loading" && (
           <div style={{ padding: 16, color: "#888" }}>Loading…</div>
         )}
@@ -131,7 +116,7 @@ function RendererSwitch(props: {
 
 function PendingRenderer({ label }: { label: string }) {
   return (
-    <pre style={{ padding: 16, color: "#888", margin: 0 }}>
+    <pre style={{ padding: 16, color: "#888", margin: 0, whiteSpace: "pre-wrap", overflowWrap: "break-word" }}>
       {label} renderer not yet implemented (filled in by later task)
     </pre>
   );

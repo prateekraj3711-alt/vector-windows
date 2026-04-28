@@ -2583,6 +2583,43 @@ function PaneTitleBar({
   );
 }
 
+function PreviewPaneTitleBar({
+  filePath,
+  jumpLine,
+  jumpCol,
+  showClose,
+  onClose,
+  onDragStart,
+  onDragEnd,
+}: {
+  filePath: string;
+  jumpLine?: number;
+  jumpCol?: number;
+  showClose: boolean;
+  onClose: () => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}) {
+  const fileName = filePath.split("/").pop() || filePath;
+  const suffix = jumpLine ? `:${jumpLine}${jumpCol ? `:${jumpCol}` : ""}` : "";
+  return (
+    <div
+      className="pane-titlebar"
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onMouseDown={(e) => e.stopPropagation()}
+      title={filePath}
+    >
+      <span className="pane-grip-dots">⋮⋮</span>
+      <span className="pane-title-label">{fileName}{suffix}</span>
+      {showClose && (
+        <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
+      )}
+    </div>
+  );
+}
+
 function flattenLeaves(node: PaneNode): PaneLeaf[] {
   return node.kind !== "split" ? [node] : [...flattenLeaves(node.children[0]), ...flattenLeaves(node.children[1])];
 }
@@ -2640,13 +2677,51 @@ function PaneView(props: PaneViewProps) {
                 overflow: "hidden",
               }}
               onMouseDown={() => onFocusPane(leaf.id)}
+              onDragOver={(e) => {
+                const kind = getDndKind();
+                if (!kind) return;
+                if (kind === "pane" && getDndPaneId() === leaf.id) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(e) => {
+                const kind = getDndKind();
+                if (!kind) return;
+                if (kind === "pane" && getDndPaneId() === leaf.id) return;
+                e.preventDefault();
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const dx = (e.clientX - r.left) / r.width;
+                const dy = (e.clientY - r.top) / r.height;
+                const edge: "left" | "right" | "top" | "bottom" =
+                  Math.min(dx, 1 - dx) < Math.min(dy, 1 - dy)
+                    ? (dx < 0.5 ? "left" : "right")
+                    : (dy < 0.5 ? "top" : "bottom");
+                onPaneDrop(leaf.id, edge);
+              }}
             >
-              <PreviewPane
-                filePath={leaf.filePath}
-                jumpLine={leaf.jumpLine}
-                jumpCol={leaf.jumpCol}
-                theme={themeKind}
-              />
+              {!single && (
+                <PreviewPaneTitleBar
+                  filePath={leaf.filePath}
+                  jumpLine={leaf.jumpLine}
+                  jumpCol={leaf.jumpCol}
+                  showClose={leaves.length > 1}
+                  onClose={() => onClosePane(leaf.id)}
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    try { e.dataTransfer.setData("text/plain", "pane"); } catch {}
+                    onPaneDragStart(leaf.id);
+                  }}
+                  onDragEnd={() => onPaneDragEnd()}
+                />
+              )}
+              <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
+                <PreviewPane
+                  filePath={leaf.filePath}
+                  jumpLine={leaf.jumpLine}
+                  jumpCol={leaf.jumpCol}
+                  theme={themeKind}
+                />
+              </div>
             </div>
           );
         }
