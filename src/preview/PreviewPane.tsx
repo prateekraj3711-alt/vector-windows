@@ -6,6 +6,7 @@ import { BinaryPlaceholder } from "./BinaryPlaceholder";
 import { TooLargePlaceholder } from "./TooLargePlaceholder";
 import { ErrorPlaceholder } from "./ErrorPlaceholder";
 import { ImageRenderer } from "./ImageRenderer";
+import { CodeRenderer } from "./CodeRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -102,8 +103,23 @@ function RendererSwitch(props: {
     case "image":
       return <ImageRenderer filePath={props.filePath} />;
     case "code":
+      return (
+        <CodeRenderer
+          data={props.data}
+          grammar={renderer.grammar ?? "text"}
+          theme={props.theme}
+          jumpLine={props.jumpLine}
+        />
+      );
     case "unknown-text":
-      return <PendingRenderer label="code" />;
+      return (
+        <CodeRenderer
+          data={props.data}
+          grammar="text"
+          theme={props.theme}
+          jumpLine={props.jumpLine}
+        />
+      );
     case "markdown":
       return <PendingRenderer label="markdown" />;
     case "mermaid":
