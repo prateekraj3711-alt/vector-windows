@@ -96,8 +96,8 @@ function renderMarkdown(md: string): ReactNode[] {
 
 type AgentMeta = { id: string; label: string; available: boolean };
 
-type PaneLeaf = {
-  kind: "leaf";
+type PtyLeaf = {
+  kind: "pty";
   id: string;
   agentId: string;
   cwd: string;
@@ -110,6 +110,25 @@ type PaneLeaf = {
   /** User-entered pane name. Takes precedence over the PTY-emitted title. */
   userTitle?: string;
 };
+
+type PreviewLeaf = {
+  kind: "preview";
+  id: string;
+  cwd: string;
+  filePath: string;
+  jumpLine?: number;
+  jumpCol?: number;
+  isPreviewSlot: boolean;
+};
+
+type PaneLeaf = PtyLeaf | PreviewLeaf;
+
+function isPtyLeaf(leaf: PaneLeaf): leaf is PtyLeaf {
+  return leaf.kind === "pty";
+}
+function isPreviewLeaf(leaf: PaneLeaf): leaf is PreviewLeaf {
+  return leaf.kind === "preview";
+}
 type PaneSplit = {
   kind: "split";
   id: string;
@@ -122,30 +141,30 @@ type Tab = { id: string; root: PaneNode; activePaneId: string; userTitle?: strin
 
 // --- pane-tree helpers ---
 function findLeaf(node: PaneNode, id: string): PaneLeaf | null {
-  if (node.kind === "leaf") return node.id === id ? node : null;
+  if (node.kind !== "split") return node.id === id ? node : null;
   return findLeaf(node.children[0], id) || findLeaf(node.children[1], id);
 }
 function firstLeafId(node: PaneNode): string {
-  return node.kind === "leaf" ? node.id : firstLeafId(node.children[0]);
+  return node.kind !== "split" ? node.id : firstLeafId(node.children[0]);
 }
 function allLeafIds(node: PaneNode): string[] {
-  return node.kind === "leaf" ? [node.id] : [...allLeafIds(node.children[0]), ...allLeafIds(node.children[1])];
+  return node.kind !== "split" ? [node.id] : [...allLeafIds(node.children[0]), ...allLeafIds(node.children[1])];
 }
 function mapLeaf(node: PaneNode, id: string, fn: (leaf: PaneLeaf) => PaneLeaf): PaneNode {
-  if (node.kind === "leaf") return node.id === id ? fn(node) : node;
+  if (node.kind !== "split") return node.id === id ? fn(node) : node;
   return { ...node, children: [mapLeaf(node.children[0], id, fn), mapLeaf(node.children[1], id, fn)] };
 }
 function mapAllLeaves(node: PaneNode, fn: (leaf: PaneLeaf) => PaneLeaf): PaneNode {
-  if (node.kind === "leaf") return fn(node);
+  if (node.kind !== "split") return fn(node);
   return { ...node, children: [mapAllLeaves(node.children[0], fn), mapAllLeaves(node.children[1], fn)] };
 }
 function splitLeaf(root: PaneNode, leafId: string, direction: "row" | "column", newAgentId: string): { root: PaneNode; newLeafId: string } {
   let newLeafId = "";
   const walk = (node: PaneNode): PaneNode => {
-    if (node.kind === "leaf") {
+    if (node.kind !== "split") {
       if (node.id !== leafId) return node;
       newLeafId = crypto.randomUUID();
-      const newLeaf: PaneLeaf = { kind: "leaf", id: newLeafId, agentId: newAgentId, cwd: node.cwd, epoch: 0 };
+      const newLeaf: PaneLeaf = { kind: "pty", id: newLeafId, agentId: newAgentId, cwd: node.cwd, epoch: 0 };
       return { kind: "split", id: crypto.randomUUID(), direction, children: [node, newLeaf], ratio: 0.5 };
     }
     return { ...node, children: [walk(node.children[0]), walk(node.children[1])] };
@@ -160,7 +179,7 @@ function insertSubtreeBeside(
   position: "before" | "after",
 ): PaneNode {
   const walk = (n: PaneNode): PaneNode => {
-    if (n.kind === "leaf") {
+    if (n.kind !== "split") {
       if (n.id !== targetLeafId) return n;
       const children: [PaneNode, PaneNode] = position === "before" ? [sub, n] : [n, sub];
       return { kind: "split", id: crypto.randomUUID(), direction, children, ratio: 0.5 };
@@ -170,7 +189,7 @@ function insertSubtreeBeside(
   return walk(root);
 }
 function removeLeaf(root: PaneNode, leafId: string): PaneNode | null {
-  if (root.kind === "leaf") return root.id === leafId ? null : root;
+  if (root.kind !== "split") return root.id === leafId ? null : root;
   const a = removeLeaf(root.children[0], leafId);
   const b = removeLeaf(root.children[1], leafId);
   if (!a && !b) return null;
@@ -179,7 +198,7 @@ function removeLeaf(root: PaneNode, leafId: string): PaneNode | null {
   return { ...root, children: [a, b] };
 }
 function updateRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
-  if (root.kind === "leaf") return root;
+  if (root.kind !== "split") return root;
   if (root.id === splitId) return { ...root, ratio };
   return { ...root, children: [updateRatio(root.children[0], splitId, ratio), updateRatio(root.children[1], splitId, ratio)] };
 }
@@ -187,7 +206,7 @@ function updateRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
 // Compute each leaf's virtual rect [x,y,w,h] in the unit square for navigation.
 function leafRects(node: PaneNode, rect: [number, number, number, number]): Array<{ id: string; rect: [number, number, number, number] }> {
   const [x, y, w, h] = rect;
-  if (node.kind === "leaf") return [{ id: node.id, rect: [x, y, w, h] }];
+  if (node.kind !== "split") return [{ id: node.id, rect: [x, y, w, h] }];
   const { direction, children, ratio } = node;
   if (direction === "row") {
     return [
@@ -224,13 +243,50 @@ function findAdjacentPane(root: PaneNode, activeId: string, dir: "ArrowLeft" | "
   }
   return best?.id ?? null;
 }
+function migrateNodeDroppingPreviews(node: any): PaneNode | null {
+  if (!node || typeof node !== "object") return null;
+  if (node.kind === "leaf") {
+    return {
+      kind: "pty",
+      id: node.id,
+      agentId: node.agentId,
+      cwd: node.cwd,
+      resumeId: node.resumeId,
+      continueLatest: node.continueLatest,
+      epoch: typeof node.epoch === "number" ? node.epoch : 0,
+      profileOverride: node.profileOverride,
+      userTitle: node.userTitle,
+    } as PtyLeaf;
+  }
+  if (node.kind === "pty") return node as PtyLeaf;
+  if (node.kind === "preview") return null;
+  if (node.kind === "split") {
+    const a = migrateNodeDroppingPreviews(node.children?.[0]);
+    const b = migrateNodeDroppingPreviews(node.children?.[1]);
+    if (a && b) return { ...node, children: [a, b] } as PaneSplit;
+    if (a) return a;
+    if (b) return b;
+    return null;
+  }
+  return null;
+}
+
 function migrateTab(raw: any): Tab {
   const userTitle = typeof raw?.userTitle === "string" && raw.userTitle.trim() ? raw.userTitle.trim() : undefined;
-  if (raw && raw.root) return { ...(raw as Tab), userTitle };
-  // Old flat shape → single-leaf tree.
+  if (raw && raw.root) {
+    const migratedRoot = migrateNodeDroppingPreviews(raw.root);
+    if (migratedRoot) {
+      const activePaneId = raw.activePaneId && findLeaf(migratedRoot, raw.activePaneId)
+        ? raw.activePaneId
+        : firstLeafId(migratedRoot);
+      return { ...(raw as Tab), root: migratedRoot, activePaneId, userTitle };
+    }
+    // Root collapsed entirely — fall through to default-leaf construction.
+  }
+  // Old flat shape (or fully collapsed root) → single-leaf tree.
   const paneId = crypto.randomUUID();
   const leaf: PaneLeaf = {
-    kind: "leaf",
+    kind: "pty",
     id: paneId,
     agentId: raw?.agentId ?? "__shell__",
     cwd: raw?.cwd ?? "",
@@ -508,7 +564,7 @@ export default function App() {
       const src = prev.find((t) => t.id === fromTabId);
       if (!src) return prev;
       // Sole pane of a tab → no-op (would just be renaming the tab).
-      if (src.root.kind === "leaf" && src.root.id === paneId) return prev;
+      if (src.root.kind !== "split" && src.root.id === paneId) return prev;
       const leaf = findLeaf(src.root, paneId);
       if (!leaf) return prev;
       const newRoot = removeLeaf(src.root, paneId);
@@ -645,11 +701,14 @@ export default function App() {
           const t = migrateTab(raw);
           return {
             ...t,
-            root: mapAllLeaves(t.root, (leaf) => ({
-              ...leaf,
-              epoch: (leaf.epoch ?? 0) + 1,
-              continueLatest: leaf.resumeId ? leaf.continueLatest : true,
-            })),
+            root: mapAllLeaves(t.root, (leaf) => {
+              if (!isPtyLeaf(leaf)) return leaf;
+              return {
+                ...leaf,
+                epoch: (leaf.epoch ?? 0) + 1,
+                continueLatest: leaf.resumeId ? leaf.continueLatest : true,
+              };
+            }),
           };
         });
         setTabs(restored);
@@ -681,15 +740,16 @@ export default function App() {
         const id = p.forTabId;
         setTabs((prev) => prev.map((t) => {
           if (t.id !== id) return t;
-          return { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({
-            ...leaf, cwd: path, agentId, resumeId, continueLatest: false, epoch: leaf.epoch + 1,
-          })) };
+          return { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => {
+            if (!isPtyLeaf(leaf)) return leaf;
+            return { ...leaf, cwd: path, agentId, resumeId, continueLatest: false, epoch: leaf.epoch + 1 };
+          }) };
         }));
       } else {
         const paneId = crypto.randomUUID();
         const t: Tab = {
           id: crypto.randomUUID(),
-          root: { kind: "leaf", id: paneId, agentId, cwd: path, resumeId, epoch: 0 },
+          root: { kind: "pty", id: paneId, agentId, cwd: path, resumeId, epoch: 0 },
           activePaneId: paneId,
         };
         setTabs((prev) => [...prev, t]);
@@ -759,7 +819,7 @@ export default function App() {
       const tab = prev.find((t) => t.id === activeIdRef.current);
       if (!tab) return prev;
       const activeLeaf = findLeaf(tab.root, tab.activePaneId);
-      const agentId = activeLeaf?.agentId ?? defaultAgent;
+      const agentId = (activeLeaf && isPtyLeaf(activeLeaf) ? activeLeaf.agentId : undefined) ?? defaultAgent;
       const { root: newRoot, newLeafId } = splitLeaf(tab.root, tab.activePaneId, direction, agentId);
       return prev.map((t) => t.id === tab.id ? { ...t, root: newRoot, activePaneId: newLeafId } : t);
     });
@@ -773,7 +833,7 @@ export default function App() {
    *  (epoch bump) so the new CLAUDE_CONFIG_DIR takes effect. */
   const setPaneProfileOverride = useCallback((tabId: string, override: string | null | undefined) => {
     setTabs((prev) => prev.map((t) => t.id === tabId
-      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, profileOverride: override, epoch: leaf.epoch + 1 })) }
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, profileOverride: override, epoch: leaf.epoch + 1 }) : leaf) }
       : t));
   }, []);
 
@@ -783,13 +843,13 @@ export default function App() {
 
   const reloadActive = useCallback(() => {
     setTabs((prev) => prev.map((t) => t.id === activeId
-      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, epoch: leaf.epoch + 1 })) }
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, epoch: leaf.epoch + 1 }) : leaf) }
       : t));
   }, [activeId]);
 
   const changeActiveAgent = useCallback((agentId: string) => {
     setTabs((prev) => prev.map((t) => t.id === activeId
-      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 })) }
+      ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 }) : leaf) }
       : t));
   }, [activeId]);
 
@@ -828,8 +888,9 @@ export default function App() {
       setBellTabs((b) => { const n = new Set(b); n.add(tabId); return n; });
       const tab = tabs.find((t) => t.id === tabId);
       const leaf = tab ? findLeaf(tab.root, paneId) : null;
-      const agent = agents.find((a) => a.id === leaf?.agentId);
-      const label = agent?.label ?? leaf?.agentId ?? "Agent";
+      const ptyAgentId = leaf && isPtyLeaf(leaf) ? leaf.agentId : undefined;
+      const agent = agents.find((a) => a.id === ptyAgentId);
+      const label = agent?.label ?? ptyAgentId ?? "Agent";
       if (notifReady.current) {
         try { sendNotification({ title: "Vector", body: `${label} needs input` }); } catch {}
       }
@@ -911,18 +972,19 @@ export default function App() {
     return themeName === "light" ? lightTheme : darkTheme;
   }, [themeName, customTheme]);
 
-  const ctxAgentId = activeLeaf?.agentId ?? "";
+  const activePty = activeLeaf && isPtyLeaf(activeLeaf) ? activeLeaf : null;
+  const ctxAgentId = activePty?.agentId ?? "";
   // Resolve which Claude profile the active pane is using. Mirrors ProfilePill.
   const ctxProfileKey: string | null = useMemo(() => {
     if (ctxAgentId !== "claude") return null;
-    const override = activeLeaf?.profileOverride;
+    const override = activePty?.profileOverride;
     if (override === null) return "__default__";
     if (typeof override === "string") {
       return claudeProfiles.some((p) => p.id === override) ? override : "__default__";
     }
-    const resolved = resolveProfileForCwd(claudeProfiles, activeLeaf?.cwd ?? "");
+    const resolved = resolveProfileForCwd(claudeProfiles, activePty?.cwd ?? "");
     return resolved?.id ?? "__default__";
-  }, [ctxAgentId, activeLeaf?.profileOverride, activeLeaf?.cwd, claudeProfiles]);
+  }, [ctxAgentId, activePty?.profileOverride, activePty?.cwd, claudeProfiles]);
   useEffect(() => {
     if (!ctxProfileKey) return;
     let cancelled = false;
@@ -1033,7 +1095,8 @@ export default function App() {
       <div className="tabs">
         {tabs.map((t, i) => {
           const activeLeaf = findLeaf(t.root, t.activePaneId);
-          const tabAgentId = activeLeaf?.agentId ?? "__shell__";
+          const activePtyLeaf = activeLeaf && isPtyLeaf(activeLeaf) ? activeLeaf : null;
+          const tabAgentId = activePtyLeaf?.agentId ?? "__shell__";
           const tabCwd = activeLeaf?.cwd ?? "";
           const agent = agents.find((a) => a.id === tabAgentId);
           const agentLabel = agent?.label ?? (tabAgentId === "__shell__" ? "shell" : tabAgentId);
@@ -1042,7 +1105,7 @@ export default function App() {
             .replace(new RegExp(`^\\s*${agentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[–—\\-:·|·]?\\s*`, "i"), "")
             .trim();
           // tab-level rename wins; else active pane's user name; else stripped PTY title; else basename(cwd)
-          const title = t.userTitle || activeLeaf?.userTitle || stripped || basename(tabCwd);
+          const title = t.userTitle || activePtyLeaf?.userTitle || stripped || basename(tabCwd);
           const isRenaming = renamingTabId === t.id;
           const classes = ["tab"];
           if (t.id === activeId) classes.push("active");
@@ -1099,7 +1162,7 @@ export default function App() {
                 <ProfilePill
                   profiles={claudeProfiles}
                   cwd={tabCwd}
-                  override={activeLeaf?.profileOverride}
+                  override={activePtyLeaf?.profileOverride}
                   onPick={(id) => setPaneProfileOverride(t.id, id)}
                   onManage={() => { setSettingsSection("profiles"); setSettingsOpen(true); }}
                 />
@@ -1322,9 +1385,9 @@ export default function App() {
           </button>
         ) : <div style={{ flex: "0 0 auto" }} />}
         <select
-          value={activeLeaf?.agentId ?? ""}
+          value={activePty?.agentId ?? ""}
           onChange={(e) => changeActiveAgent(e.target.value)}
-          disabled={!activeLeaf}
+          disabled={!activePty}
         >
           {agents.filter((a) => a.available).map((a) => (
             <option key={a.id} value={a.id}>{a.label}</option>
@@ -2438,7 +2501,7 @@ function PaneTitleBar({
   onDragStart,
   onDragEnd,
 }: {
-  leaf: PaneLeaf;
+  leaf: PtyLeaf;
   title: string;
   renaming: boolean;
   draft: string;
@@ -2492,12 +2555,12 @@ function PaneTitleBar({
 }
 
 function flattenLeaves(node: PaneNode): PaneLeaf[] {
-  return node.kind === "leaf" ? [node] : [...flattenLeaves(node.children[0]), ...flattenLeaves(node.children[1])];
+  return node.kind !== "split" ? [node] : [...flattenLeaves(node.children[0]), ...flattenLeaves(node.children[1])];
 }
 
 type DividerInfo = { id: string; direction: "row" | "column"; pos: number; container: [number, number, number, number]; ratio: number };
 function computeDividers(node: PaneNode, rect: [number, number, number, number]): DividerInfo[] {
-  if (node.kind === "leaf") return [];
+  if (node.kind !== "split") return [];
   const [x, y, w, h] = rect;
   const { direction, children, ratio, id } = node;
   if (direction === "row") {
@@ -2536,6 +2599,23 @@ function PaneView(props: PaneViewProps) {
         const tr = x + w > 1 - EPS && y < EPS ? R : "0";
         const br = x + w > 1 - EPS && y + h > 1 - EPS ? R : "0";
         const bl = x < EPS && y + h > 1 - EPS ? R : "0";
+        if (leaf.kind === "preview") {
+          return (
+            <div
+              key={leaf.id}
+              className={`pane${isActive ? " pane-active" : ""}${single ? " pane-solo" : ""}`}
+              style={{
+                position: "absolute",
+                left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%`,
+                borderRadius: `${tl} ${tr} ${br} ${bl}`,
+                overflow: "hidden",
+              }}
+              onMouseDown={() => onFocusPane(leaf.id)}
+            >
+              <div style={{ padding: 16, color: "#888" }}>preview placeholder: {leaf.filePath}</div>
+            </div>
+          );
+        }
         return (
           <div
             key={leaf.id}
