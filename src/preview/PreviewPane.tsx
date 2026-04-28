@@ -9,6 +9,7 @@ import { ImageRenderer } from "./ImageRenderer";
 import { CodeRenderer } from "./CodeRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MermaidRenderer } from "./MermaidRenderer";
+import { PdfRenderer } from "./PdfRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -129,7 +130,7 @@ function RendererSwitch(props: {
       return <MermaidRenderer source={src} />;
     }
     case "pdf":
-      return <PendingRenderer label="pdf" />;
+      return <PdfRenderer data={props.data} jumpLine={props.jumpLine} />;
     case "binary":
       return <BinaryPlaceholder filePath={props.filePath} />;
   }
