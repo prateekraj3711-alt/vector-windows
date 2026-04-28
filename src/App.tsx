@@ -203,6 +203,38 @@ function updateRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
   if (root.id === splitId) return { ...root, ratio };
   return { ...root, children: [updateRatio(root.children[0], splitId, ratio), updateRatio(root.children[1], splitId, ratio)] };
 }
+function splitLeafWithLeaf(
+  root: PaneNode,
+  leafId: string,
+  direction: "row" | "column",
+  newLeaf: PaneLeaf,
+): { root: PaneNode; newLeafId: string } {
+  const newLeafId = newLeaf.id;
+  const walk = (node: PaneNode): PaneNode => {
+    if (node.kind !== "split") {
+      if (node.id !== leafId) return node;
+      const split: PaneSplit = {
+        kind: "split",
+        id: crypto.randomUUID(),
+        direction,
+        ratio: 0.5,
+        children: [node, newLeaf],
+      };
+      return split;
+    }
+    return { ...node, children: [walk(node.children[0]), walk(node.children[1])] as [PaneNode, PaneNode] };
+  };
+  return { root: walk(root), newLeafId };
+}
+function findPreviewSlot(node: PaneNode): PreviewLeaf | null {
+  if (node.kind === "pty") return null;
+  if (node.kind === "preview") return node.isPreviewSlot ? node : null;
+  return findPreviewSlot(node.children[0]) ?? findPreviewSlot(node.children[1]);
+}
+function getCwdForLeaf(node: PaneNode, leafId: string): string | null {
+  if (node.kind !== "split") return node.id === leafId ? node.cwd : null;
+  return getCwdForLeaf(node.children[0], leafId) ?? getCwdForLeaf(node.children[1], leafId);
+}
 
 // Compute each leaf's virtual rect [x,y,w,h] in the unit square for navigation.
 function leafRects(node: PaneNode, rect: [number, number, number, number]): Array<{ id: string; rect: [number, number, number, number] }> {
@@ -505,31 +537,8 @@ export default function App() {
   const activeIdRef = useRef("");
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
 
-  // Dev-only debug helper: window.__vectorDebugInjectPreview("/path/to/file") splits the
-  // active tab and mounts a preview leaf. Replaced by real triggers in a later task.
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    (window as any).__vectorDebugInjectPreview = (filePath: string) => {
-      setTabs((prev) => prev.map((tab) => {
-        if (tab.id !== activeIdRef.current) return tab;
-        const newPreview: PreviewLeaf = {
-          kind: "preview",
-          id: crypto.randomUUID(),
-          cwd: "/",
-          filePath,
-          isPreviewSlot: true,
-        };
-        const newSplit: PaneSplit = {
-          kind: "split",
-          id: crypto.randomUUID(),
-          direction: "row",
-          ratio: 0.5,
-          children: [tab.root, newPreview],
-        };
-        return { ...tab, root: newSplit };
-      }));
-    };
-  }, [setTabs]);
+  // Dev-only debug helper: window.__vectorDebugInjectPreview("/path/to/file") delegates
+  // to the real openPreview orchestrator (slot-reuse when not pinned).
   const dragFromRef = useRef<number | null>(null);
   type DndPayload = { kind: "pane"; fromTabId: string; paneId: string } | { kind: "tab"; tabId: string };
   const dndRef = useRef<DndPayload | null>(null);
@@ -851,6 +860,49 @@ export default function App() {
       return prev.map((t) => t.id === tab.id ? { ...t, root: newRoot, activePaneId: newLeafId } : t);
     });
   }, [defaultAgent]);
+
+  const openPreview = useCallback(
+    (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => {
+      setTabs((prev) =>
+        prev.map((tab) => {
+          if (tab.id !== activeIdRef.current) return tab;
+
+          if (!opts.pin) {
+            const slot = findPreviewSlot(tab.root);
+            if (slot) {
+              const updatedRoot = mapLeaf(tab.root, slot.id, (leaf) => {
+                if (leaf.kind !== "preview") return leaf;
+                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col };
+              });
+              return { ...tab, root: updatedRoot, activePaneId: slot.id };
+            }
+          }
+
+          const cwd = getCwdForLeaf(tab.root, tab.activePaneId) ?? "/";
+          const newLeaf: PreviewLeaf = {
+            kind: "preview",
+            id: crypto.randomUUID(),
+            cwd,
+            filePath: absPath,
+            jumpLine: line,
+            jumpCol: col,
+            isPreviewSlot: !opts.pin,
+          };
+          const { root, newLeafId } = splitLeafWithLeaf(tab.root, tab.activePaneId, "row", newLeaf);
+          return { ...tab, root, activePaneId: newLeafId };
+        }),
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as any).__vectorDebugInjectPreview = (filePath: string, line?: number, col?: number, pin?: boolean) => {
+      openPreview(filePath, line, col, { pin: !!pin });
+    };
+    (window as any).__openPreview = openPreview;
+  }, [openPreview]);
 
   const setActivePane = useCallback((tabId: string, paneId: string) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, activePaneId: paneId } : t));
