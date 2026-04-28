@@ -17,6 +17,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
+import { PreviewPane } from "./preview/PreviewPane";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -503,6 +504,32 @@ export default function App() {
   const tabsLoaded = useRef(false);
   const activeIdRef = useRef("");
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+
+  // Dev-only debug helper: window.__vectorDebugInjectPreview("/path/to/file") splits the
+  // active tab and mounts a preview leaf. Replaced by real triggers in a later task.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as any).__vectorDebugInjectPreview = (filePath: string) => {
+      setTabs((prev) => prev.map((tab) => {
+        if (tab.id !== activeIdRef.current) return tab;
+        const newPreview: PreviewLeaf = {
+          kind: "preview",
+          id: crypto.randomUUID(),
+          cwd: "/",
+          filePath,
+          isPreviewSlot: true,
+        };
+        const newSplit: PaneSplit = {
+          kind: "split",
+          id: crypto.randomUUID(),
+          direction: "row",
+          ratio: 0.5,
+          children: [tab.root, newPreview],
+        };
+        return { ...tab, root: newSplit };
+      }));
+    };
+  }, [setTabs]);
   const dragFromRef = useRef<number | null>(null);
   type DndPayload = { kind: "pane"; fromTabId: string; paneId: string } | { kind: "tab"; tabId: string };
   const dndRef = useRef<DndPayload | null>(null);
@@ -1434,6 +1461,7 @@ export default function App() {
                 activePaneId={t.activePaneId}
                 tabVisible={t.id === activeId}
                 theme={xtermTheme}
+                themeKind={themeName === "light" ? "light" : "dark"}
                 fontFamily={fontFamily}
                 fontSize={fontSize}
                 onFocusPane={(pid) => setActivePane(t.id, pid)}
@@ -2464,6 +2492,7 @@ type PaneViewProps = {
   activePaneId: string;
   tabVisible: boolean;
   theme: ITheme;
+  themeKind: "dark" | "light";
   fontFamily: string;
   fontSize: number;
   onFocusPane: (paneId: string) => void;
@@ -2581,7 +2610,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -2612,7 +2641,12 @@ function PaneView(props: PaneViewProps) {
               }}
               onMouseDown={() => onFocusPane(leaf.id)}
             >
-              <div style={{ padding: 16, color: "#888" }}>preview placeholder: {leaf.filePath}</div>
+              <PreviewPane
+                filePath={leaf.filePath}
+                jumpLine={leaf.jumpLine}
+                jumpCol={leaf.jumpCol}
+                theme={themeKind}
+              />
             </div>
           );
         }
