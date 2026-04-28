@@ -8,6 +8,7 @@ import { ErrorPlaceholder } from "./ErrorPlaceholder";
 import { ImageRenderer } from "./ImageRenderer";
 import { CodeRenderer } from "./CodeRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { MermaidRenderer } from "./MermaidRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -123,8 +124,10 @@ function RendererSwitch(props: {
       );
     case "markdown":
       return <MarkdownRenderer data={props.data} theme={props.theme} jumpLine={props.jumpLine} />;
-    case "mermaid":
-      return <PendingRenderer label="mermaid" />;
+    case "mermaid": {
+      const src = new TextDecoder("utf-8", { fatal: false }).decode(props.data);
+      return <MermaidRenderer source={src} />;
+    }
     case "pdf":
       return <PendingRenderer label="pdf" />;
     case "binary":
