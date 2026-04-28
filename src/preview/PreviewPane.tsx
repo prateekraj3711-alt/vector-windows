@@ -7,6 +7,7 @@ import { TooLargePlaceholder } from "./TooLargePlaceholder";
 import { ErrorPlaceholder } from "./ErrorPlaceholder";
 import { ImageRenderer } from "./ImageRenderer";
 import { CodeRenderer } from "./CodeRenderer";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -121,7 +122,7 @@ function RendererSwitch(props: {
         />
       );
     case "markdown":
-      return <PendingRenderer label="markdown" />;
+      return <MarkdownRenderer data={props.data} theme={props.theme} jumpLine={props.jumpLine} />;
     case "mermaid":
       return <PendingRenderer label="mermaid" />;
     case "pdf":
