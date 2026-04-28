@@ -5,6 +5,7 @@ import { isLikelyBinary } from "./sniff";
 import { BinaryPlaceholder } from "./BinaryPlaceholder";
 import { TooLargePlaceholder } from "./TooLargePlaceholder";
 import { ErrorPlaceholder } from "./ErrorPlaceholder";
+import { ImageRenderer } from "./ImageRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -99,7 +100,7 @@ function RendererSwitch(props: {
   const renderer = pickRenderer(props.filePath);
   switch (renderer.kind) {
     case "image":
-      return <PendingRenderer label="image" />;
+      return <ImageRenderer filePath={props.filePath} />;
     case "code":
     case "unknown-text":
       return <PendingRenderer label="code" />;
