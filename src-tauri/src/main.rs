@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod preview;
 mod pty;
 mod sessions;
 mod usage;
@@ -564,7 +565,9 @@ fn main() {
             list_sessions, search_sessions, get_session, supported_resume_agents, open_path,
             set_badge_count, get_claude_usage,
             list_claude_profiles, create_claude_profile, update_claude_profile,
-            delete_claude_profile, resolve_claude_profile, validate_claude_home
+            delete_claude_profile, resolve_claude_profile, validate_claude_home,
+            preview::path_exists, preview::read_file_bytes, preview::reveal_in_finder,
+            preview::open_default_app
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");
