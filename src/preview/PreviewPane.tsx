@@ -10,6 +10,7 @@ import { CodeRenderer } from "./CodeRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MermaidRenderer } from "./MermaidRenderer";
 import { PdfRenderer } from "./PdfRenderer";
+import { HtmlRenderer } from "./HtmlRenderer";
 import { PathContextMenu } from "./contextMenu";
 
 type ReadFileResult = {
@@ -150,15 +151,28 @@ function RendererSwitch(props: {
   switch (renderer.kind) {
     case "image":
       return <ImageRenderer filePath={props.filePath} />;
-    case "code":
+    case "html":
+      return <HtmlRenderer data={props.data} />;
+    case "code": {
+      let codeData = props.data;
+      if (renderer.grammar === "json") {
+        try {
+          const text = new TextDecoder("utf-8", { fatal: false }).decode(props.data);
+          const pretty = JSON.stringify(JSON.parse(text), null, 2);
+          codeData = new TextEncoder().encode(pretty);
+        } catch {
+          // Leave bytes untouched on parse error.
+        }
+      }
       return (
         <CodeRenderer
-          data={props.data}
+          data={codeData}
           grammar={renderer.grammar ?? "text"}
           theme={props.theme}
           jumpLine={props.jumpLine}
         />
       );
+    }
     case "unknown-text":
       return (
         <CodeRenderer

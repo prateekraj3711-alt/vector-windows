@@ -1,4 +1,4 @@
-export type RendererKind = "markdown" | "mermaid" | "code" | "image" | "pdf" | "binary" | "unknown-text";
+export type RendererKind = "markdown" | "mermaid" | "code" | "html" | "image" | "pdf" | "binary" | "unknown-text";
 
 export const CAPS = {
   TEXT: 5 * 1024 * 1024,    // 5 MB
@@ -17,7 +17,7 @@ const CODE_GRAMMARS: Record<string, string> = {
   yaml: "yaml", yml: "yaml",
   toml: "toml",
   css: "css", scss: "scss",
-  html: "html", xml: "xml",
+  xml: "xml",
   sql: "sql",
   lua: "lua", php: "php",
   ex: "elixir", exs: "elixir",
@@ -44,6 +44,7 @@ export function pickRenderer(path: string): { kind: RendererKind; grammar?: stri
   if (ext === "md" || ext === "markdown") return { kind: "markdown" };
   if (ext === "mmd" || ext === "mermaid") return { kind: "mermaid" };
   if (ext === "pdf") return { kind: "pdf" };
+  if (ext === "html" || ext === "htm") return { kind: "html" };
   if (IMAGE_EXTS.has(ext)) return { kind: "image" };
   if (ext in CODE_GRAMMARS) return { kind: "code", grammar: CODE_GRAMMARS[ext] };
   return { kind: "unknown-text" };
