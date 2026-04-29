@@ -19,35 +19,18 @@ export function CodeRenderer({
     let cancelled = false;
     (async () => {
       try {
-        const { createHighlighterCore } = await import("shiki/core");
-        const { createOnigurumaEngine } = await import("shiki/engine/oniguruma");
-        const wasm = await import("shiki/wasm");
-        // Try the requested grammar; fall back to plain text on import failure.
-        // Shiki has no "text" grammar file — "text" is a builtin no-op lang.
-        let grammarMod: any = null;
-        if (grammar && grammar !== "text") {
-          try {
-            grammarMod = await import(/* @vite-ignore */ `shiki/langs/${grammar}.mjs`);
-          } catch {
-            grammarMod = null;
-          }
-        }
-        const themeMod =
-          theme === "dark"
-            ? await import("shiki/themes/github-dark.mjs")
-            : await import("shiki/themes/github-light.mjs");
-        const hl = await createHighlighterCore({
-          themes: [themeMod.default],
-          langs: grammarMod ? [grammarMod.default] : [],
-          engine: createOnigurumaEngine(wasm.default),
+        const shiki = await import("shiki");
+        const { createHighlighter, bundledLanguages, bundledThemes } = shiki as any;
+        const themeName = theme === "dark" ? "github-dark" : "github-light";
+        const wantLang = grammar && grammar !== "text" && grammar in bundledLanguages ? grammar : null;
+        const langs = wantLang ? [wantLang] : [];
+        const hl = await createHighlighter({
+          themes: [themeName in bundledThemes ? themeName : "github-dark"],
+          langs,
         });
         if (cancelled) return;
-        const lang = grammarMod
-          ? ((Array.isArray(grammarMod.default) ? grammarMod.default[0]?.name : grammarMod.default?.name) ?? grammar)
-          : "text";
-        const themeName = themeMod.default.name ?? (theme === "dark" ? "github-dark" : "github-light");
         const out = hl.codeToHtml(text, {
-          lang,
+          lang: wantLang ?? "text",
           theme: themeName,
         });
         setHtml(out);
