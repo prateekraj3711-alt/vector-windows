@@ -9,21 +9,88 @@ not a shell prompt.
   <img src="src/logo.png" alt="Vector" width="96" />
 </p>
 
-## What it does
+## Table of Contents
 
-- **Agent-native tabs** — `⌘T` opens a new tab already inside an agent, scoped to a project folder you pick.
-- **Claude Profiles** — map folders to separate Claude accounts (`CLAUDE_CONFIG_DIR` under the hood). Open `~/work` with your work account, `~/personal` with your personal one — no more `/logout` → `/login`. Seed a new profile from an existing Claude home to carry over login, settings, and session history. A small pill on each Claude tab shows the active profile with a dropdown to override.
-- **Pane splits** — split a tab into a grid of agent panes with `⌘D` / `⌘⇧D`, drag dividers to resize, drag panes between tabs. Each pane runs its own agent.
-- **Resume Claude sessions** — the project picker surfaces the session history for the folder you chose, so you can jump back into a conversation instead of starting fresh.
-- **Auto-detect installed agents** — scans `PATH` for known CLIs; only shows ones you actually have.
-- **Project picker** — remembers recents, one picker per new tab.
-- **Per-tab agent swap** — change agent from the topbar dropdown; session restarts cleanly.
-- **Claude usage meter** — live 5-hour and 7-day usage bars in the topbar when a Claude pane is active.
-- **Terminal context menu** — right-click a URL or file path to Open/Copy. Right-click a selection to **Copy as plain text** (strips NBSP, zero-width chars, and Claude's indent gutter so pasting into Slack or docs doesn't look weird).
-- **Bell notifications** — when an agent emits `\x07` (asking for input) and the tab is inactive or the window is unfocused, the tab is highlighted and a macOS notification fires.
-- **Theme** — dark or Solarized Light.
-- **Tab layout** — horizontal on top, or vertical sidebar.
-- **Per-agent icons and chips** in every tab.
+- [Features](#features)
+  - [Agent-native tabs](#agent-native-tabs)
+  - [Claude Profiles](#claude-profiles)
+  - [Pane splits](#pane-splits)
+  - [File Previewer](#file-previewer)
+  - [Resume Claude sessions](#resume-claude-sessions)
+  - [Auto-detect installed agents](#auto-detect-installed-agents)
+  - [Project picker](#project-picker)
+  - [Per-tab agent swap](#per-tab-agent-swap)
+  - [Claude usage meter](#claude-usage-meter)
+  - [Terminal context menu](#terminal-context-menu)
+  - [Bell notifications](#bell-notifications)
+  - [Theme](#theme)
+  - [Tab layout](#tab-layout)
+  - [Per-agent icons and chips](#per-agent-icons-and-chips)
+- [Shortcuts](#shortcuts)
+- [Claude Profiles (in depth)](#claude-profiles-in-depth)
+- [How it was built](#how-it-was-built)
+- [Try it](#try-it)
+- [Build from source](#build-from-source)
+- [Add a custom agent](#add-a-custom-agent)
+- [License](#license)
+
+## Features
+
+### Agent-native tabs
+
+`⌘T` opens a new tab already inside an agent, scoped to a project folder you pick.
+
+### Claude Profiles
+
+Map folders to separate Claude accounts (`CLAUDE_CONFIG_DIR` under the hood). Open `~/work` with your work account, `~/personal` with your personal one — no more `/logout` → `/login`. [Read more](#claude-profiles-in-depth).
+
+### Pane splits
+
+Split a tab into a grid of agent panes with `⌘D` / `⌘⇧D`, drag dividers to resize, drag panes between tabs. Each pane runs its own agent.
+
+### File Previewer
+
+⌘-click any file path printed by an agent to open a read-only preview in a side pane on the same tab. Supports Markdown (with embedded Mermaid diagrams), standalone Mermaid, syntax-highlighted code (js/ts/py/rs/rb and other common formats), PDF, and images. ⌘⇧-click pins a second preview for side-by-side compare. Right-click any path or preview pane for **Reveal in Finder**, **Open in default app**, or **Copy path**.
+
+### Resume Claude sessions
+
+The project picker surfaces the session history for the folder you chose, so you can jump back into a conversation instead of starting fresh.
+
+### Auto-detect installed agents
+
+Scans `PATH` for known CLIs; only shows ones you actually have.
+
+### Project picker
+
+Remembers recents, one picker per new tab.
+
+### Per-tab agent swap
+
+Change agent from the topbar dropdown; session restarts cleanly.
+
+### Claude usage meter
+
+Live 5-hour and 7-day usage bars in the topbar when a Claude pane is active.
+
+### Terminal context menu
+
+Right-click a URL or file path to Open / Reveal in Finder / Copy. Right-click a selection to **Copy as plain text** (strips NBSP, zero-width chars, and Claude's indent gutter so pasting into Slack or docs doesn't look weird).
+
+### Bell notifications
+
+When an agent emits `\x07` (asking for input) and the tab is inactive or the window is unfocused, the tab is highlighted and a macOS notification fires.
+
+### Theme
+
+Dark or Solarized Light.
+
+### Tab layout
+
+Horizontal on top, or vertical sidebar.
+
+### Per-agent icons and chips
+
+Per-agent icons and chips in every tab.
 
 ## Shortcuts
 
@@ -42,7 +109,7 @@ not a shell prompt.
 | `⌥←` / `⌥→` | Cursor back / forward one word |
 | `⌘⌫` / `⌥⌫` | Delete to line start / word start |
 
-## Claude Profiles
+## Claude Profiles (in depth)
 
 If you juggle two Claude accounts — say personal and work — the usual flow is painful: Claude Code keeps a single login in `~/.claude/`, so switching means `/logout` then `/login` every time you move between folders.
 
