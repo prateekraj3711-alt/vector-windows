@@ -148,6 +148,47 @@ export type OpenPreviewFn = (
   opts: { pin: boolean },
 ) => void;
 
+// Greedy-extend an absolute/tilde path hit by appending trailing space-separated
+// words from the same line and re-validating. Picks the longest extension that
+// resolves to an existing file. Used to recover paths printed unquoted, e.g.
+// `/tmp/My Project/Notes Final.md`.
+async function tryExtendCandidate(line: string, hit: ScanHit): Promise<ScanHit> {
+  if (!(hit.absPath.startsWith("/") || hit.absPath.startsWith("~/"))) return hit;
+  if (hit.lineNo !== undefined) return hit; // already terminated by :line:col
+  if (line[hit.end] !== " ") return hit;
+  const after = line.slice(hit.end);
+  const tokens: string[] = [];
+  const tokRe = /^ ([^\s|,;()[\]{}]+)/;
+  let consumed = 0;
+  while (tokens.length < 6) {
+    const m = tokRe.exec(after.slice(consumed));
+    if (!m) break;
+    tokens.push(m[1]);
+    consumed += m[0].length;
+  }
+  if (tokens.length === 0) return hit;
+  const exts: string[] = [];
+  let cur = hit.absPath;
+  for (const t of tokens) {
+    cur = cur + " " + t;
+    exts.push(cur);
+  }
+  const results = await Promise.all(exts.map((p) => validate(p)));
+  let best = -1;
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].exists) best = i;
+  }
+  if (best < 0) return hit;
+  let extra = 0;
+  for (let i = 0; i <= best; i++) extra += 1 + tokens[i].length;
+  return {
+    ...hit,
+    absPath: results[best].absPath,
+    raw: hit.raw + line.slice(hit.end, hit.end + extra),
+    end: hit.end + extra,
+  };
+}
+
 export function registerPreviewLinkProvider(
   term: Terminal,
   getCwd: () => string,
@@ -163,7 +204,15 @@ export function registerPreviewLinkProvider(
       }
       const text = lineObj.translateToString(true);
       const cwd = getCwd();
-      const cands = scanLine(text, cwd);
+      const initial = scanLine(text, cwd);
+      const extended = await Promise.all(initial.map((c) => tryExtendCandidate(text, c)));
+      extended.sort((a, b) => a.start - b.start);
+      const cands: ScanHit[] = [];
+      for (const c of extended) {
+        const last = cands[cands.length - 1];
+        if (last && c.start < last.end) continue;
+        cands.push(c);
+      }
       const validated = await Promise.all(cands.map((c) => validate(c.absPath)));
       const links: ILink[] = [];
       for (let i = 0; i < cands.length; i++) {
