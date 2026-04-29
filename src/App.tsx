@@ -3306,6 +3306,12 @@ function TerminalContextMenu({ menu, onClose }: { menu: TermMenuData; onClose: (
       label: `Open ${menu.linkKind === "url" ? "URL" : "path"}`,
       onClick: () => { invoke("open_path", { path: menu.uri }).catch(() => {}); onClose(); },
     });
+    if (menu.linkKind === "path") {
+      items.push({
+        label: "Reveal in Finder",
+        onClick: () => { invoke("reveal_in_finder", { path: menu.uri }).catch(() => {}); onClose(); },
+      });
+    }
     items.push({
       label: `Copy ${menu.linkKind === "url" ? "URL" : "path"}`,
       onClick: () => writeClipboard(menu.uri),
