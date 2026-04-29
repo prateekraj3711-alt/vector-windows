@@ -2,6 +2,7 @@
 
 mod config;
 mod fs_watch;
+mod git;
 mod preview;
 mod pty;
 mod sessions;
