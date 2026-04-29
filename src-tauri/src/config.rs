@@ -44,15 +44,25 @@ fn config_path() -> Option<PathBuf> {
 
 // ——— UI / sidebar config ———
 
-fn default_sidebar_active_tab() -> String { "files".into() }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarTab {
+    Files,
+    Worktrees,
+}
+
+impl Default for SidebarTab {
+    fn default() -> Self { SidebarTab::Files }
+}
+
 fn default_sidebar_width() -> u32 { 240 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
     #[serde(default)]
     pub sidebar_collapsed: bool,
-    #[serde(default = "default_sidebar_active_tab")]
-    pub sidebar_active_tab: String,
+    #[serde(default)]
+    pub sidebar_active_tab: SidebarTab,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: u32,
     #[serde(default)]
@@ -63,7 +73,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         UiConfig {
             sidebar_collapsed: false,
-            sidebar_active_tab: default_sidebar_active_tab(),
+            sidebar_active_tab: SidebarTab::default(),
             sidebar_width: default_sidebar_width(),
             show_hidden_files: false,
         }
@@ -77,7 +87,9 @@ fn ui_config_path() -> Option<PathBuf> {
 pub fn load_ui_config() -> UiConfig {
     let Some(p) = ui_config_path() else { return UiConfig::default() };
     let Ok(text) = std::fs::read_to_string(&p) else { return UiConfig::default() };
-    toml::from_str(&text).unwrap_or_default()
+    let mut cfg: UiConfig = toml::from_str(&text).unwrap_or_default();
+    cfg.sidebar_width = cfg.sidebar_width.clamp(160, 600);
+    cfg
 }
 
 pub fn save_ui_config(cfg: &UiConfig) -> std::io::Result<()> {
