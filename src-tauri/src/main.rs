@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod fs_watch;
 mod preview;
 mod pty;
 mod sessions;
@@ -16,6 +17,7 @@ struct AppState {
     config: parking_lot::Mutex<config::Config>,
     profiles: parking_lot::Mutex<config::ProfilesFile>,
     ui_config: parking_lot::Mutex<config::UiConfig>,
+    watchers: parking_lot::Mutex<std::collections::HashMap<String, fs_watch::WatcherHandle>>,
 }
 
 #[derive(Serialize)]
@@ -167,9 +169,19 @@ async fn start_session(
         }
     }
 
+    let watch_root = cwd.clone();
     state.registry
-        .spawn(app, session_id, &resolved, &env, cwd, cols, rows, agent_id == "claude")
-        .map_err(|e| e.to_string())
+        .spawn(app.clone(), session_id.clone(), &resolved, &env, cwd, cols, rows, agent_id == "claude")
+        .map_err(|e| e.to_string())?;
+
+    if let Some(root) = watch_root {
+        match fs_watch::start_watcher(session_id.clone(), root, app) {
+            Ok(handle) => { state.watchers.lock().insert(session_id, handle); }
+            Err(e) => eprintln!("Failed to start fs watcher for {session_id}: {e}"),
+        }
+    }
+
+    Ok(())
 }
 
 // ——— Claude profile commands ———
@@ -456,6 +468,7 @@ async fn resize_pty(state: State<'_, AppState>, session_id: String, cols: u16, r
 
 #[tauri::command]
 async fn kill_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    state.watchers.lock().remove(&session_id);
     state.registry.kill(&session_id).map_err(|e| e.to_string())
 }
 
@@ -587,6 +600,7 @@ fn main() {
             config: parking_lot::Mutex::new(config::load()),
             profiles: parking_lot::Mutex::new(config::load_profiles()),
             ui_config: parking_lot::Mutex::new(config::load_ui_config()),
+            watchers: parking_lot::Mutex::new(std::collections::HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
