@@ -32,9 +32,10 @@ export function CodeRenderer({
             grammarMod = null;
           }
         }
-        const themeMod = await import(
-          theme === "dark" ? "shiki/themes/github-dark.mjs" : "shiki/themes/github-light.mjs"
-        );
+        const themeMod =
+          theme === "dark"
+            ? await import("shiki/themes/github-dark.mjs")
+            : await import("shiki/themes/github-light.mjs");
         const hl = await createHighlighterCore({
           themes: [themeMod.default],
           langs: grammarMod ? [grammarMod.default] : [],
