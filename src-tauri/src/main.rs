@@ -7,6 +7,7 @@ mod preview;
 mod pty;
 mod sessions;
 mod usage;
+mod worktree_session;
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -19,6 +20,8 @@ struct AppState {
     profiles: parking_lot::Mutex<config::ProfilesFile>,
     ui_config: parking_lot::Mutex<config::UiConfig>,
     watchers: parking_lot::Mutex<std::collections::HashMap<String, fs_watch::WatcherHandle>>,
+    session_snapshots: parking_lot::Mutex<std::collections::HashMap<String, worktree_session::Snapshot>>,
+    session_manual_pins: parking_lot::Mutex<std::collections::HashMap<String, std::collections::HashSet<std::path::PathBuf>>>,
 }
 
 #[derive(Serialize)]
@@ -176,10 +179,14 @@ async fn start_session(
         .map_err(|e| e.to_string())?;
 
     if let Some(root) = watch_root {
-        match fs_watch::start_watcher(session_id.clone(), root, app) {
-            Ok(handle) => { state.watchers.lock().insert(session_id, handle); }
+        match fs_watch::start_watcher(session_id.clone(), root.clone(), app) {
+            Ok(handle) => { state.watchers.lock().insert(session_id.clone(), handle); }
             Err(e) => eprintln!("Failed to start fs watcher for {session_id}: {e}"),
         }
+        let worktrees = worktree_session::discover_worktrees(&root);
+        let snapshot = worktree_session::take_snapshot(&worktrees);
+        state.session_snapshots.lock().insert(session_id.clone(), snapshot);
+        state.session_manual_pins.lock().insert(session_id.clone(), Default::default());
     }
 
     Ok(())
@@ -470,6 +477,8 @@ async fn resize_pty(state: State<'_, AppState>, session_id: String, cols: u16, r
 #[tauri::command]
 async fn kill_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     state.watchers.lock().remove(&session_id);
+    state.session_snapshots.lock().remove(&session_id);
+    state.session_manual_pins.lock().remove(&session_id);
     state.registry.kill(&session_id).map_err(|e| e.to_string())
 }
 
@@ -602,6 +611,8 @@ fn main() {
             profiles: parking_lot::Mutex::new(config::load_profiles()),
             ui_config: parking_lot::Mutex::new(config::load_ui_config()),
             watchers: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            session_snapshots: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            session_manual_pins: parking_lot::Mutex::new(std::collections::HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
