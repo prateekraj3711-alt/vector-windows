@@ -3,6 +3,26 @@ import { useSidebarState, SidebarTab } from "./sidebarState";
 
 const RAIL_WIDTH = 42;
 
+function FilesIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h3.5l2 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+    </svg>
+  );
+}
+
+function WorktreesIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="6" cy="6" r="2.25" />
+      <circle cx="6" cy="18" r="2.25" />
+      <circle cx="18" cy="9" r="2.25" />
+      <path d="M6 8.25v7.5" />
+      <path d="M6 14a6 6 0 0 0 6-6 3 3 0 0 1 3-3" />
+    </svg>
+  );
+}
+
 export function Sidebar() {
   const { state, update, hydrated } = useSidebarState();
   const { sidebar_collapsed, sidebar_active_tab, sidebar_width } = state;
@@ -31,12 +51,12 @@ export function Sidebar() {
           className={`sidebar-rail-icon${sidebar_active_tab === "files" && !sidebar_collapsed ? " active" : ""}`}
           onClick={() => onIconClick("files")}
           title="Files"
-        >📁</button>
+        ><FilesIcon /></button>
         <button
           className={`sidebar-rail-icon${sidebar_active_tab === "worktrees" && !sidebar_collapsed ? " active" : ""}`}
           onClick={() => onIconClick("worktrees")}
           title="Worktrees"
-        >🌿</button>
+        ><WorktreesIcon /></button>
       </div>
 
       {!sidebar_collapsed && (

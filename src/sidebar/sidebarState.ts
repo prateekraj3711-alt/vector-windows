@@ -13,24 +13,6 @@ export type SidebarState = {
   show_hidden_files: boolean;
 };
 
-// Tauri v2 converts camelCase JS args → snake_case Rust struct fields.
-// SidebarConfigPatch (Rust) fields: sidebar_collapsed, sidebar_active_tab,
-// sidebar_width, show_hidden_files — so send camelCase from JS.
-type SidebarPatchArgs = {
-  sidebarCollapsed?: boolean;
-  sidebarActiveTab?: SidebarTab;
-  sidebarWidth?: number;
-  showHiddenFiles?: boolean;
-};
-
-function toBackendPatch(patch: Partial<SidebarState>): SidebarPatchArgs {
-  const out: SidebarPatchArgs = {};
-  if (patch.sidebar_collapsed !== undefined) out.sidebarCollapsed = patch.sidebar_collapsed;
-  if (patch.sidebar_active_tab !== undefined) out.sidebarActiveTab = patch.sidebar_active_tab;
-  if (patch.sidebar_width !== undefined) out.sidebarWidth = patch.sidebar_width;
-  if (patch.show_hidden_files !== undefined) out.showHiddenFiles = patch.show_hidden_files;
-  return out;
-}
 
 const DEFAULT: SidebarState = {
   sidebar_collapsed: false,
@@ -52,7 +34,7 @@ export function useSidebarState() {
   const update = (patch: Partial<SidebarState>) => {
     setState((prev) => ({ ...prev, ...patch }));
     if (hydrated) {
-      invoke("update_sidebar_config", { patch: toBackendPatch(patch) }).catch(console.error);
+      invoke("update_sidebar_config", { patch }).catch(console.error);
     }
   };
 
