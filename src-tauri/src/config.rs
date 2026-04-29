@@ -42,6 +42,59 @@ fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("vector").join("config.toml"))
 }
 
+// ——— UI / sidebar config ———
+
+fn default_sidebar_active_tab() -> String { "files".into() }
+fn default_sidebar_width() -> u32 { 240 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    #[serde(default = "default_sidebar_active_tab")]
+    pub sidebar_active_tab: String,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
+    #[serde(default)]
+    pub show_hidden_files: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        UiConfig {
+            sidebar_collapsed: false,
+            sidebar_active_tab: default_sidebar_active_tab(),
+            sidebar_width: default_sidebar_width(),
+            show_hidden_files: false,
+        }
+    }
+}
+
+fn ui_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("vector").join("ui.toml"))
+}
+
+pub fn load_ui_config() -> UiConfig {
+    let Some(p) = ui_config_path() else { return UiConfig::default() };
+    let Ok(text) = std::fs::read_to_string(&p) else { return UiConfig::default() };
+    toml::from_str(&text).unwrap_or_default()
+}
+
+pub fn save_ui_config(cfg: &UiConfig) -> std::io::Result<()> {
+    let Some(p) = ui_config_path() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no config dir"));
+    };
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = toml::to_string_pretty(cfg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let tmp = p.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &p)?;
+    Ok(())
+}
+
 pub fn load() -> Config {
     let mut cfg = builtin();
     if let Some(p) = config_path() {

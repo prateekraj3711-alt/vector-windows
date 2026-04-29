@@ -15,6 +15,7 @@ struct AppState {
     registry: Arc<pty::PtyRegistry>,
     config: parking_lot::Mutex<config::Config>,
     profiles: parking_lot::Mutex<config::ProfilesFile>,
+    ui_config: parking_lot::Mutex<config::UiConfig>,
 }
 
 #[derive(Serialize)]
@@ -522,6 +523,31 @@ async fn set_badge_count(app: AppHandle, count: u32) -> Result<(), String> {
     Ok(())
 }
 
+// ——— Sidebar / UI config commands ———
+
+#[tauri::command]
+async fn get_ui_config(state: State<'_, AppState>) -> Result<config::UiConfig, String> {
+    Ok(state.ui_config.lock().clone())
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SidebarConfigPatch {
+    sidebar_collapsed: Option<bool>,
+    sidebar_active_tab: Option<String>,
+    sidebar_width: Option<u32>,
+    show_hidden_files: Option<bool>,
+}
+
+#[tauri::command]
+async fn update_sidebar_config(state: State<'_, AppState>, patch: SidebarConfigPatch) -> Result<(), String> {
+    let mut cfg = state.ui_config.lock();
+    if let Some(v) = patch.sidebar_collapsed { cfg.sidebar_collapsed = v; }
+    if let Some(v) = patch.sidebar_active_tab { cfg.sidebar_active_tab = v; }
+    if let Some(v) = patch.sidebar_width { cfg.sidebar_width = v; }
+    if let Some(v) = patch.show_hidden_files { cfg.show_hidden_files = v; }
+    config::save_ui_config(&cfg).map_err(|e| e.to_string())
+}
+
 /// Open a URL, file, or folder with the OS default handler. Expands a
 /// leading `~/` or bare `~` against `$HOME` first so paths lifted out of
 /// shell output work without manual expansion.
@@ -559,6 +585,7 @@ fn main() {
             registry: Arc::new(pty::PtyRegistry::new()),
             config: parking_lot::Mutex::new(config::load()),
             profiles: parking_lot::Mutex::new(config::load_profiles()),
+            ui_config: parking_lot::Mutex::new(config::load_ui_config()),
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
@@ -567,7 +594,8 @@ fn main() {
             list_claude_profiles, create_claude_profile, update_claude_profile,
             delete_claude_profile, resolve_claude_profile, validate_claude_home,
             preview::path_exists, preview::read_file_bytes, preview::reveal_in_finder,
-            preview::open_default_app
+            preview::open_default_app,
+            get_ui_config, update_sidebar_config
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");
