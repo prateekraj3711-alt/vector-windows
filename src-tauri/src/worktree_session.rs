@@ -12,8 +12,8 @@ pub struct WorktreeState {
 
 pub type Snapshot = HashMap<PathBuf, WorktreeState>;
 
-/// Walk a project root to find all git repos, then for each repo enumerate its worktrees.
-/// Returns a flat Vec of worktree paths (each repo contributes 1+ worktrees).
+/// BFS-walk `project_root` to find all git repo roots (directories containing
+/// a `.git` entry).
 ///
 /// Discovery rules:
 /// - BFS walk from `project_root`, depth-capped at 4
@@ -21,7 +21,7 @@ pub type Snapshot = HashMap<PathBuf, WorktreeState>;
 ///   (starting with `.`) EXCEPT the project root itself
 /// - A directory is a repo if it contains a `.git` entry (file OR dir)
 /// - Once a repo is found, do not descend further into it
-pub fn discover_worktrees(project_root: &Path) -> Vec<PathBuf> {
+pub fn discover_repos(project_root: &Path) -> Vec<PathBuf> {
     let mut repos: Vec<PathBuf> = Vec::new();
     let mut queue: Vec<(PathBuf, u32)> = vec![(project_root.to_path_buf(), 0)];
 
@@ -57,16 +57,17 @@ pub fn discover_worktrees(project_root: &Path) -> Vec<PathBuf> {
         }
     }
 
-    // For each repo, get its worktree list. Collect all worktree paths.
-    let mut all: Vec<PathBuf> = Vec::new();
-    for repo in &repos {
-        if let Ok(wts) = git::worktree_list(repo) {
-            for wt in wts {
-                all.push(wt.path);
-            }
-        }
-    }
-    all
+    repos
+}
+
+/// Walk a project root to find all git repos, then for each repo enumerate its worktrees.
+/// Returns a flat Vec of worktree paths (each repo contributes 1+ worktrees).
+pub fn discover_worktrees(project_root: &Path) -> Vec<PathBuf> {
+    discover_repos(project_root)
+        .iter()
+        .flat_map(|repo| git::worktree_list(repo).unwrap_or_default())
+        .map(|wt| wt.path)
+        .collect()
 }
 
 pub fn take_snapshot(worktrees: &[PathBuf]) -> Snapshot {

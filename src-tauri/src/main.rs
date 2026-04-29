@@ -7,6 +7,7 @@ mod preview;
 mod pty;
 mod sessions;
 mod usage;
+mod sidebar;
 mod worktree_session;
 
 use serde::Serialize;
@@ -22,6 +23,7 @@ struct AppState {
     watchers: parking_lot::Mutex<std::collections::HashMap<String, fs_watch::WatcherHandle>>,
     session_snapshots: parking_lot::Mutex<std::collections::HashMap<String, worktree_session::Snapshot>>,
     session_manual_pins: parking_lot::Mutex<std::collections::HashMap<String, std::collections::HashSet<std::path::PathBuf>>>,
+    installed_editors: parking_lot::Mutex<Option<Vec<sidebar::EditorInfo>>>,
 }
 
 #[derive(Serialize)]
@@ -613,6 +615,7 @@ fn main() {
             watchers: parking_lot::Mutex::new(std::collections::HashMap::new()),
             session_snapshots: parking_lot::Mutex::new(std::collections::HashMap::new()),
             session_manual_pins: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            installed_editors: parking_lot::Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
@@ -622,7 +625,16 @@ fn main() {
             delete_claude_profile, resolve_claude_profile, validate_claude_home,
             preview::path_exists, preview::read_file_bytes, preview::reveal_in_finder,
             preview::open_default_app,
-            get_ui_config, update_sidebar_config
+            get_ui_config, update_sidebar_config,
+            sidebar::list_dir,
+            sidebar::list_repos_in_project,
+            sidebar::list_worktrees_for_repo,
+            sidebar::list_linked_worktrees,
+            sidebar::worktree_changes,
+            sidebar::worktree_diff,
+            sidebar::pin_worktree,
+            sidebar::installed_editors,
+            sidebar::open_in_editor,
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");
