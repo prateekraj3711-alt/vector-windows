@@ -296,7 +296,7 @@
       .profile-dd-sep { height: 1px; background: var(--border); margin: 4px 2px; }
       .profile-dd-item.accent { color: #ff8a4c; }
 
-      .picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; backdrop-filter: blur(3px); }
+      .picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 150; backdrop-filter: blur(3px); }
       .picker-head { display: flex; align-items: center; justify-content: space-between; }
       .picker-card { width: 460px; max-width: 100%; background: var(--elev); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px 22px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
       .picker-brand { display: flex; align-items: center; gap: 8px; color: var(--fg); font-weight: 600; letter-spacing: 0.5px; }
@@ -384,8 +384,9 @@
         position: fixed; left: 0; top: 0; bottom: 0; width: 42px;
         background: var(--elev); border-right: 1px solid var(--border);
         display: flex; flex-direction: column; align-items: center;
-        padding-top: 10px; gap: 8px; z-index: 100;
+        padding-top: 10px; padding-bottom: 10px; gap: 8px; z-index: 100;
       }
+      .sidebar-rail-spacer { flex: 1; }
       .sidebar-rail-icon {
         background: transparent; border: 0; font-size: 18px;
         color: var(--muted); width: 32px; height: 32px; border-radius: 4px;
