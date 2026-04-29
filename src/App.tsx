@@ -19,6 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
 import { PreviewPane } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
+import { Sidebar } from "./sidebar/Sidebar";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -1359,6 +1360,7 @@ export default function App() {
 
   return (
     <>
+      <Sidebar />
       {update && (
         <div className="update-banner">
           <div className="update-row">
@@ -1458,7 +1460,7 @@ export default function App() {
           {updateCheck === "error" && "Update check failed. Try again later."}
         </div>
       )}
-      <div className="topbar">
+      <div className="topbar" style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
         {activeTab && activeLeaf ? (
           <button className="project-btn" onClick={() => openPickerForTab(activeTab.id)} title={activeLeaf.cwd}>
             <VectorMark size={14} /> {basename(activeLeaf.cwd)}
@@ -1495,7 +1497,7 @@ export default function App() {
         </div>
       </div>
       {fiveHour && ctxPct >= 60 && (
-        <div className={`ctx-banner${ctxLevel === "crit" ? " crit" : ""}`}>
+        <div className={`ctx-banner${ctxLevel === "crit" ? " crit" : ""}`} style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
           <span>
             {ctxLevel === "crit"
               ? `5h session limit nearly full (${ctxPct}% used)${ctxResetText ? ` — resets ${ctxResetText}` : ""}.`
@@ -1503,7 +1505,7 @@ export default function App() {
           </span>
         </div>
       )}
-      <div className={`shell ${orientation}`}>
+      <div className={`shell ${orientation}`} style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
         {tabs.length > 0 && tabBar}
         <div className="terms">
           {tabs.map((t) => (
