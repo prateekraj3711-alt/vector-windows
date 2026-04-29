@@ -44,11 +44,35 @@ async function validate(candidate: string): Promise<Validation> {
   }
 }
 
+// Unquoted paths. Permits backslash-escaped whitespace (`/Users/My\ Files/x.md`).
 const PATH_RE =
-  /(\/[^\s:()[\]{}'"`,;]+|~\/[^\s:()[\]{}'"`,;]+|[A-Za-z0-9._@\-/]+\.[A-Za-z0-9]+)(?::(\d+))?(?::(\d+))?/g;
+  /(\/(?:\\\s|[^\s:()[\]{}'"`,;])+|~\/(?:\\\s|[^\s:()[\]{}'"`,;])+|[A-Za-z0-9._@\-/]+\.[A-Za-z0-9]+)(?::(\d+))?(?::(\d+))?/g;
+
+// Quoted paths: "...", '...', `...` — captures inner content.
+const QUOTED_RE = /(["'`])([^"'`\n]+)\1/g;
 
 function trimTrailingPunct(s: string): string {
   return s.replace(/[.,;:)\]}>'"`]+$/, "");
+}
+
+function unescapeBackslashSpaces(s: string): string {
+  return s.replace(/\\(\s)/g, "$1");
+}
+
+function looksLikePath(s: string): boolean {
+  if (s.startsWith("/") || s.startsWith("~/") || s.startsWith("./") || s.startsWith("../")) return true;
+  if (s.includes("/")) return true;
+  return /\.[A-Za-z0-9]+(?::\d+){0,2}$/.test(s);
+}
+
+function splitLineCol(s: string): { pathPart: string; lineNo?: number; colNo?: number } {
+  const m = /^(.*?)(?::(\d+))?(?::(\d+))?$/.exec(s);
+  if (!m) return { pathPart: s };
+  return {
+    pathPart: m[1] ?? s,
+    lineNo: m[2] ? parseInt(m[2], 10) : undefined,
+    colNo: m[3] ? parseInt(m[3], 10) : undefined,
+  };
 }
 
 function resolveAgainstCwd(candidate: string, cwd: string): string {
@@ -69,31 +93,51 @@ export type ScanHit = {
 
 export function scanLine(line: string, cwd: string): ScanHit[] {
   const out: ScanHit[] = [];
+  const consumed: Array<[number, number]> = [];
+
+  // Pass 1: quoted strings that look like paths.
+  QUOTED_RE.lastIndex = 0;
+  let qm: RegExpExecArray | null;
+  while ((qm = QUOTED_RE.exec(line)) !== null) {
+    const inner = qm[2];
+    if (!looksLikePath(inner)) continue;
+    const { pathPart, lineNo, colNo } = splitLineCol(inner);
+    if (!pathPart) continue;
+    const start = qm.index + 1; // skip opening quote
+    const end = start + inner.length;
+    out.push({
+      raw: inner,
+      absPath: resolveAgainstCwd(unescapeBackslashSpaces(pathPart), cwd),
+      start,
+      end,
+      lineNo,
+      colNo,
+    });
+    consumed.push([qm.index, qm.index + qm[0].length]);
+  }
+
+  // Pass 2: unquoted paths.
   PATH_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PATH_RE.exec(line)) !== null) {
+    const idx = m.index;
+    if (consumed.some(([s, e]) => idx >= s && idx < e)) continue;
     const fullRaw = trimTrailingPunct(m[0]);
     if (fullRaw.length < 2) continue;
-    const lineColMatch = /^(.*?)(?::(\d+))?(?::(\d+))?$/.exec(fullRaw);
-    let pathPart = fullRaw;
-    let lineNo: number | undefined;
-    let colNo: number | undefined;
-    if (lineColMatch) {
-      pathPart = lineColMatch[1];
-      if (lineColMatch[2]) lineNo = parseInt(lineColMatch[2], 10);
-      if (lineColMatch[3]) colNo = parseInt(lineColMatch[3], 10);
-    }
+    const { pathPart, lineNo, colNo } = splitLineCol(fullRaw);
     if (!pathPart) continue;
-    const absPath = resolveAgainstCwd(pathPart, cwd);
+    const absPath = resolveAgainstCwd(unescapeBackslashSpaces(pathPart), cwd);
     out.push({
       raw: fullRaw,
       absPath,
-      start: m.index,
-      end: m.index + fullRaw.length,
+      start: idx,
+      end: idx + fullRaw.length,
       lineNo,
       colNo,
     });
   }
+
+  out.sort((a, b) => a.start - b.start);
   return out;
 }
 
