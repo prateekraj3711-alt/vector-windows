@@ -19,18 +19,94 @@ export function MarkdownRenderer({
 
   const html = useMemo(() => {
     const renderer = new Renderer();
+    let cursorLine = 1;
+
+    const advance = (raw: string | undefined) => {
+      if (!raw) return;
+      // Number of newlines in raw == lines this token spans.
+      let n = 0;
+      for (let i = 0; i < raw.length; i++) if (raw.charCodeAt(i) === 10) n++;
+      cursorLine += n;
+    };
+
+    const wrap = (line: number, inner: string) => `<div data-md-line="${line}">${inner}</div>`;
+
+    const origHeading = renderer.heading.bind(renderer);
+    renderer.heading = (token: any) => {
+      const line = cursorLine;
+      const out = origHeading(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
+    const origParagraph = renderer.paragraph.bind(renderer);
+    renderer.paragraph = (token: any) => {
+      const line = cursorLine;
+      const out = origParagraph(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
+    const origList = renderer.list.bind(renderer);
+    renderer.list = (token: any) => {
+      const line = cursorLine;
+      const out = origList(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
+    const origBlockquote = renderer.blockquote.bind(renderer);
+    renderer.blockquote = (token: any) => {
+      const line = cursorLine;
+      const out = origBlockquote(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
+    const origHr = renderer.hr.bind(renderer);
+    renderer.hr = (token: any) => {
+      const line = cursorLine;
+      const out = origHr(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
+    const origTable = renderer.table.bind(renderer);
+    renderer.table = (token: any) => {
+      const line = cursorLine;
+      const out = origTable(token);
+      advance(token.raw);
+      return wrap(line, out);
+    };
+
     const origCode = renderer.code.bind(renderer);
-    renderer.code = ({ text: codeText, lang }: any) => {
+    renderer.code = (token: any) => {
+      const line = cursorLine;
+      const { text: codeText, lang, raw } = token;
       if (lang === "mermaid") {
         const encoded = encodeURIComponent(codeText);
-        return `<div class="mermaid-block" data-source="${encoded}"></div>`;
+        advance(raw);
+        return `<div class="mermaid-block" data-md-line="${line}" data-source="${encoded}"></div>`;
       }
-      return origCode({ text: codeText, lang } as any);
+      const out = origCode(token);
+      advance(raw);
+      return wrap(line, out);
     };
+
+    // "space" tokens (blank lines) just advance the cursor.
+    const origSpace = (renderer as any).space?.bind(renderer);
+    if (origSpace) {
+      (renderer as any).space = (token: any) => {
+        const out = origSpace(token);
+        advance(token.raw);
+        return out;
+      };
+    }
+
     const raw = marked.parse(text, { async: false, renderer }) as string;
     return DOMPurify.sanitize(raw, {
       ADD_TAGS: ["div"],
-      ADD_ATTR: ["data-source"],
+      ADD_ATTR: ["data-source", "data-md-line"],
       FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
       FORBID_ATTR: ["onerror", "onload", "onclick"],
     });
@@ -53,10 +129,25 @@ export function MarkdownRenderer({
 
   useEffect(() => {
     if (!jumpLine || !containerRef.current) return;
-    const blocks = containerRef.current.children;
-    if (blocks.length === 0) return;
-    const idx = Math.min(blocks.length - 1, Math.max(0, jumpLine - 1));
-    (blocks[idx] as HTMLElement)?.scrollIntoView({ block: "center" });
+    const els = containerRef.current.querySelectorAll<HTMLElement>("[data-md-line]");
+    let best: HTMLElement | null = null;
+    let bestLine = -1;
+    for (const el of els) {
+      const n = parseInt(el.dataset.mdLine ?? "0", 10);
+      if (n <= jumpLine && n > bestLine) {
+        best = el;
+        bestLine = n;
+      }
+    }
+    if (best) {
+      best.scrollIntoView({ block: "center" });
+      const el = best;
+      el.style.transition = "background 600ms";
+      el.style.background = "rgba(255, 220, 0, 0.18)";
+      setTimeout(() => {
+        el.style.background = "transparent";
+      }, 50);
+    }
   }, [html, jumpLine]);
 
   return (
