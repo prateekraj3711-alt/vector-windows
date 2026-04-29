@@ -45,9 +45,10 @@ export function CodeRenderer({
         const lang = grammarMod
           ? ((Array.isArray(grammarMod.default) ? grammarMod.default[0]?.name : grammarMod.default?.name) ?? grammar)
           : "text";
+        const themeName = themeMod.default.name ?? (theme === "dark" ? "github-dark" : "github-light");
         const out = hl.codeToHtml(text, {
           lang,
-          theme: themeMod.default.name,
+          theme: themeName,
         });
         setHtml(out);
         setErr(null);
