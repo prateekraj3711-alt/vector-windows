@@ -18,6 +18,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
 import { PreviewPane } from "./preview/PreviewPane";
+import { registerPreviewLinkProvider } from "./preview/linkProvider";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -1535,6 +1536,7 @@ export default function App() {
                 onCommitPaneRename={commitPaneRename}
                 onCancelPaneRename={() => { setRenamingPaneId(null); setPaneRenameDraft(""); }}
                 onClosePane={(pid) => closePane(t.id, pid)}
+                onOpenPreview={openPreview}
               />
             </div>
           ))}
@@ -2566,6 +2568,7 @@ type PaneViewProps = {
   onCommitPaneRename: () => void;
   onCancelPaneRename: () => void;
   onClosePane: (paneId: string) => void;
+  onOpenPreview: (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
 };
 
 function PaneTitleBar({
@@ -2699,7 +2702,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -2850,6 +2853,7 @@ function PaneView(props: PaneViewProps) {
                 onTitle={onTitle}
                 onExit={() => onExitPane(leaf.id)}
                 onSessionStart={onSessionStart}
+                onOpenPreview={onOpenPreview}
               />
             </div>
           </div>
@@ -2912,6 +2916,7 @@ function TerminalView({
   onTitle,
   onExit,
   onSessionStart,
+  onOpenPreview,
 }: {
   tabId: string;
   paneId: string;
@@ -2930,6 +2935,7 @@ function TerminalView({
   onTitle: (tabId: string, paneId: string, title: string) => void;
   onExit: () => void;
   onSessionStart?: (leafId: string, epoch: number) => void;
+  onOpenPreview: (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -2966,6 +2972,13 @@ function TerminalView({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Preview link provider — registered first so ⌘-click on validated file
+    // paths opens the in-app preview before WebLinksAddon / OS-open path provider.
+    const previewLinkDisposable = registerPreviewLinkProvider(
+      term,
+      () => cwd,
+      onOpenPreview,
+    );
     // http(s) links — route through the OS default handler so they land in
     // the user's browser instead of the WKWebView's blocked window.open.
     term.loadAddon(new WebLinksAddon(
@@ -3203,6 +3216,7 @@ function TerminalView({
       unlistenExit?.();
       unlistenNotify?.();
       if (sessionRef.current) invoke("kill_session", { sessionId: sessionRef.current }).catch(() => {});
+      try { previewLinkDisposable.dispose(); } catch {}
       term.dispose();
       termRef.current = null;
     };
