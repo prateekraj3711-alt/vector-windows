@@ -10,6 +10,7 @@ import { CodeRenderer } from "./CodeRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MermaidRenderer } from "./MermaidRenderer";
 import { PdfRenderer } from "./PdfRenderer";
+import { PathContextMenu } from "./contextMenu";
 
 type ReadFileResult = {
   bytes: number[];
@@ -36,6 +37,7 @@ export function PreviewPane(props: PreviewLeafProps) {
   const { filePath, jumpLine, jumpCol, theme } = props;
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const cap = capForExtension(extOf(filePath));
 
@@ -64,7 +66,42 @@ export function PreviewPane(props: PreviewLeafProps) {
   }, [load, reloadKey]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff" }}>
+    <div
+      style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff", position: "relative" }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenu({ x: e.clientX, y: e.clientY });
+      }}
+    >
+      <button
+        type="button"
+        title="Actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setMenu({ x: r.right, y: r.bottom });
+        }}
+        style={{
+          position: "absolute",
+          top: 6,
+          right: 8,
+          zIndex: 5,
+          background: "transparent",
+          color: theme === "dark" ? "#888" : "#666",
+          border: "none",
+          cursor: "pointer",
+          fontSize: 16,
+          lineHeight: 1,
+          padding: "2px 6px",
+          borderRadius: 3,
+        }}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
+        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+      >
+        ⋯
+      </button>
       <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
         {state.status === "loading" && (
           <div style={{ padding: 16, color: "#888" }}>Loading…</div>
@@ -89,6 +126,14 @@ export function PreviewPane(props: PreviewLeafProps) {
           />
         )}
       </div>
+      {menu && (
+        <PathContextMenu
+          target={{ absPath: filePath }}
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }
