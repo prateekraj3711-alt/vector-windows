@@ -180,9 +180,7 @@ pub fn worktree_diff(
             Some(r) if !r.is_empty() => r,
             _ => git::resolve_base_ref(&worktree)?,
         };
-        // DiffBase::Ref takes &'static str for the variant tag; the actual ref
-        // is threaded through the Option<&str> parameter.
-        git::diff_file(&worktree, &file, git::DiffBase::Ref(""), Some(&resolved))
+        git::diff_file(&worktree, &file, git::DiffBase::Ref, Some(&resolved))
     }
 }
 

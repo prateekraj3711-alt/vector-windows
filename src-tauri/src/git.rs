@@ -28,7 +28,7 @@ pub struct DiffEntry {
 #[derive(Debug, Clone, Copy)]
 pub enum DiffBase {
     Head,
-    Ref(&'static str),
+    Ref,
 }
 
 fn git_bin() -> Result<PathBuf, String> {
@@ -218,7 +218,7 @@ pub fn diff_file(
         DiffBase::Head => {
             run_git(&["diff", "--", file_str.as_ref()], worktree_path)?
         }
-        DiffBase::Ref(_) => {
+        DiffBase::Ref => {
             if let Some(r) = base_ref {
                 let range = format!("{}...HEAD", r);
                 run_git(&["diff", &range, "--", file_str.as_ref()], worktree_path)?
@@ -253,8 +253,3 @@ pub fn resolve_base_ref(worktree_path: &Path) -> Result<String, String> {
     Ok("main".to_string())
 }
 
-/// `git rev-parse --git-common-dir` — useful for grouping worktrees by parent repo
-pub fn common_dir(repo_path: &Path) -> Result<PathBuf, String> {
-    let s = run_git(&["rev-parse", "--git-common-dir"], repo_path)?;
-    Ok(PathBuf::from(s.trim()))
-}
