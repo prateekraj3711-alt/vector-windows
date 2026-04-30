@@ -161,7 +161,6 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => toggle(expandedRepos, setExpandedRepos, g.repo)}
             >
-              <span className="wt-group-chevron">{isOpen ? "▾" : "▸"}</span>
               <span className="wt-group-name">{basename(g.repo)}</span>
               <span className="wt-group-count">
                 {q ? `${g.visibleWts.length}/${g.worktrees.length}` : g.worktrees.length}
