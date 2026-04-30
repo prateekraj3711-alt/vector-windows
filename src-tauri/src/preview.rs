@@ -92,10 +92,11 @@ pub fn read_file_bytes(path: String, cap_bytes: u64) -> Result<ReadFileResult, S
 #[tauri::command]
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
     let p = expand_tilde(&path);
-    Command::new("open")
+    let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
+    Command::new(open_bin)
         .arg("-R")
         .arg(&p)
-        .status()
+        .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -103,9 +104,10 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_default_app(path: String) -> Result<(), String> {
     let p = expand_tilde(&path);
-    Command::new("open")
+    let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
+    Command::new(open_bin)
         .arg(&p)
-        .status()
+        .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
 }

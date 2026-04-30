@@ -250,17 +250,15 @@ pub fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorInfo>, 
 }
 
 /// Open a path in the given editor using macOS `open -b <bundle_id> <path>`.
+/// Fire-and-forget: we spawn `open` and don't wait for it (waiting blocks the
+/// Tauri command thread for seconds while LaunchServices brings the app forward).
 #[tauri::command]
 pub fn open_in_editor(bundle_id: String, path: PathBuf) -> Result<(), String> {
     let open_bin = config::which_path("open").ok_or_else(|| "open not found in PATH".to_string())?;
-    let status = Command::new(open_bin)
+    Command::new(open_bin)
         .args(["-b", &bundle_id])
         .arg(&path)
-        .status()
+        .spawn()
         .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("open -b {} exited with {}", bundle_id, status))
-    }
+    Ok(())
 }
