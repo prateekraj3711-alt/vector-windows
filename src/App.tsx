@@ -123,6 +123,8 @@ type PreviewLeaf = {
   jumpLine?: number;
   jumpCol?: number;
   isPreviewSlot: boolean;
+  mode?: "file" | "diff"; // default "file"; when "diff", PreviewPane renders a diff
+  baseRef?: string;        // only meaningful when mode === "diff"; e.g., "origin/main"
 };
 
 type PaneLeaf = PtyLeaf | PreviewLeaf;
@@ -865,7 +867,7 @@ export default function App() {
   }, [defaultAgent]);
 
   const openPreview = useCallback(
-    (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => {
+    (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => {
       setTabs((prev) =>
         prev.map((tab) => {
           if (tab.id !== activeIdRef.current) return tab;
@@ -883,7 +885,7 @@ export default function App() {
             if (slot) {
               const updatedRoot = mapLeaf(tab.root, slot.id, (leaf) => {
                 if (leaf.kind !== "preview") return leaf;
-                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col, cwd: sourceCwd, sessionId: sourceSessionId };
+                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col, cwd: sourceCwd, sessionId: sourceSessionId, mode: opts.mode, baseRef: opts.baseRef };
               });
               return { ...tab, root: updatedRoot, activePaneId: slot.id };
             }
@@ -898,6 +900,8 @@ export default function App() {
             jumpLine: line,
             jumpCol: col,
             isPreviewSlot: !opts.pin,
+            mode: opts.mode,
+            baseRef: opts.baseRef,
           };
           const { root, newLeafId } = splitLeafWithLeaf(tab.root, tab.activePaneId, "row", newLeaf);
           return { ...tab, root, activePaneId: newLeafId };
