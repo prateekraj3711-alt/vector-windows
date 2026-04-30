@@ -402,7 +402,7 @@
         background: var(--bg); border-right: 1px solid var(--border);
         display: flex; flex-direction: column; z-index: 99;
       }
-      .sidebar-panel-content { flex: 1 1 auto; min-height: 0; overflow: auto; font-size: 13px; color: var(--fg); display: flex; flex-direction: column; padding: 0 6px; }
+      .sidebar-panel-content { flex: 1 1 auto; min-height: 0; overflow: auto; font-size: 13px; color: var(--fg); display: flex; flex-direction: column; }
       .sidebar-panel-header {
         display: flex; align-items: center; justify-content: space-between;
         padding: 4px 10px; border-bottom: 1px solid rgba(255, 138, 76, 0.45);
@@ -440,19 +440,19 @@
 
       /* Worktrees view */
       .wt-view { padding: 4px 0; user-select: none; font-size: 12.5px; }
-      .wt-search { position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 6px 8px; display: flex; gap: 4px; align-items: center; border-bottom: 1px solid var(--border); }
+      .wt-search { position: sticky; top: 0; z-index: 1; background: var(--bg); display: flex; align-items: center; border-bottom: 1px solid var(--border); }
       .wt-search-input {
-        flex: 1; background: var(--elev); border: 1px solid var(--border); color: var(--fg);
-        border-radius: 4px; padding: 0 8px; height: 24px; font-size: 12px;
+        flex: 1; background: var(--elev); border: 0; color: var(--fg);
+        border-radius: 0; padding: 0 10px; height: 28px; font-size: 12px;
         outline: none; box-sizing: border-box;
       }
-      .wt-search-input:focus { border-color: rgba(255, 138, 76, 0.55); }
+      .wt-search-input:focus { background: var(--elev-hi); }
       .wt-search-input::placeholder { color: var(--muted); }
       .wt-search-clear {
         background: transparent; border: 0; color: var(--muted); cursor: pointer;
-        font-size: 14px; line-height: 1; padding: 0 6px; height: 24px;
+        font-size: 14px; line-height: 1; padding: 0 10px; height: 28px;
         display: inline-flex; align-items: center; justify-content: center;
-        border-radius: 3px;
+        border-radius: 0;
       }
       .wt-search-clear:hover { background: var(--elev-hi); color: var(--fg); }
       .wt-loading, .wt-empty, .wt-error {
