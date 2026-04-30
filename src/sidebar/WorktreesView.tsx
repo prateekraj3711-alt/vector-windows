@@ -23,6 +23,7 @@ type Props = {
 export function WorktreesView({ projectRoot, sessionId }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
@@ -149,27 +150,37 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
       {filteredGroups.length === 0 && q && (
         <div className="wt-empty">No worktrees match "{query}"</div>
       )}
-      {filteredGroups.map((g) => (
-        <div key={g.repo} className="wt-group">
-          <div className="wt-group-header" title={g.repo}>
-            <span className="wt-group-name">{basename(g.repo)}</span>
-            <span className="wt-group-count">
-              {q ? `${g.visibleWts.length}/${g.worktrees.length}` : g.worktrees.length}
-            </span>
+      {filteredGroups.map((g) => {
+        // Active query forces all groups expanded so matches are visible.
+        const isOpen = q ? true : expandedRepos.has(g.repo);
+        return (
+          <div key={g.repo} className="wt-group">
+            <div
+              className="wt-group-header"
+              title={g.repo}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => toggle(expandedRepos, setExpandedRepos, g.repo)}
+            >
+              <span className="wt-group-chevron">{isOpen ? "▾" : "▸"}</span>
+              <span className="wt-group-name">{basename(g.repo)}</span>
+              <span className="wt-group-count">
+                {q ? `${g.visibleWts.length}/${g.worktrees.length}` : g.worktrees.length}
+              </span>
+            </div>
+            {isOpen && g.error && (
+              <div className="wt-group-error" title={g.error}>{g.error}</div>
+            )}
+            {isOpen && g.visibleWts.map((w) => (
+              <WorktreeRow
+                key={w.path}
+                worktree={w}
+                isExpanded={expanded.has(w.path)}
+                onToggle={() => toggle(expanded, setExpanded, w.path)}
+              />
+            ))}
           </div>
-          {g.error && (
-            <div className="wt-group-error" title={g.error}>{g.error}</div>
-          )}
-          {g.visibleWts.map((w) => (
-            <WorktreeRow
-              key={w.path}
-              worktree={w}
-              isExpanded={expanded.has(w.path)}
-              onToggle={() => toggle(expanded, setExpanded, w.path)}
-            />
-          ))}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
