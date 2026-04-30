@@ -255,6 +255,7 @@ function FileTreeNode({
       <div
         className="file-row"
         style={{ paddingLeft: indent }}
+        onMouseDown={(e) => { if (e.shiftKey) e.preventDefault(); }}
         onClick={(e) => handleClick(e)}
         onContextMenu={(e) => onContextMenu?.(e, entry)}
         title={entry.path}
