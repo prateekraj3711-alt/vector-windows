@@ -191,6 +191,7 @@ function WorktreeRow({
     <>
       <div
         className={`wt-row${isExpanded ? " wt-row-expanded" : ""}`}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={onToggle}
         title={worktree.path}
       >
