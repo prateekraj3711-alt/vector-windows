@@ -104,8 +104,8 @@ export function Sidebar({
       {!sidebar_collapsed && (
         <div className="sidebar-panel" style={{ width: sidebar_width }}>
           <div className="sidebar-panel-header">
-            <span className="sidebar-panel-title">
-              {sidebar_active_tab === "files" ? "Files" : "Worktrees"}
+            <span className="sidebar-panel-title" title={projectRoot ?? ""}>
+              {projectRoot ? basename(projectRoot) : (sidebar_active_tab === "files" ? "Files" : "Worktrees")}
             </span>
             {sidebar_active_tab === "files" && (
               <button
@@ -137,6 +137,13 @@ export function Sidebar({
       )}
     </>
   );
+}
+
+function basename(p: string): string {
+  if (!p) return "";
+  const trimmed = p.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 }
 
 function SidebarDivider({
