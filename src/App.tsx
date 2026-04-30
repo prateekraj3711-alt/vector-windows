@@ -236,6 +236,23 @@ function findPreviewSlot(node: PaneNode): PreviewLeaf | null {
   if (node.kind === "preview") return node.isPreviewSlot ? node : null;
   return findPreviewSlot(node.children[0]) ?? findPreviewSlot(node.children[1]);
 }
+function findPreviewByFile(
+  node: PaneNode,
+  filePath: string,
+  mode: "file" | "diff",
+  baseRef: string | undefined,
+): PreviewLeaf | null {
+  if (node.kind === "pty") return null;
+  if (node.kind === "preview") {
+    const leafMode = node.mode ?? "file";
+    if (node.filePath === filePath && leafMode === mode && (node.baseRef ?? undefined) === baseRef) {
+      return node;
+    }
+    return null;
+  }
+  return findPreviewByFile(node.children[0], filePath, mode, baseRef)
+    ?? findPreviewByFile(node.children[1], filePath, mode, baseRef);
+}
 function getCwdForLeaf(node: PaneNode, leafId: string): string | null {
   if (node.kind !== "split") return node.id === leafId ? node.cwd : null;
   return getCwdForLeaf(node.children[0], leafId) ?? getCwdForLeaf(node.children[1], leafId);
@@ -880,7 +897,14 @@ export default function App() {
             : undefined;
           const sourceCwd = focused?.cwd ?? "/";
 
-          if (!opts.pin) {
+          if (opts.pin) {
+            // Duplicate guard: if any preview leaf already shows this exact file+mode+baseRef,
+            // just focus it instead of creating another pinned copy.
+            const existing = findPreviewByFile(tab.root, absPath, opts.mode ?? "file", opts.baseRef);
+            if (existing) {
+              return { ...tab, activePaneId: existing.id };
+            }
+          } else {
             const slot = findPreviewSlot(tab.root);
             if (slot) {
               const updatedRoot = mapLeaf(tab.root, slot.id, (leaf) => {
