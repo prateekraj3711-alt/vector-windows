@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { WorktreeChanges } from "./WorktreeChanges";
 
 type WorktreeInfo = {
   path: string;
@@ -18,9 +19,10 @@ type RepoGroup = {
 type Props = {
   projectRoot: string | null;
   sessionId: string | null;
+  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
 };
 
-export function WorktreesView({ projectRoot, sessionId }: Props) {
+export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
@@ -175,6 +177,7 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
                 worktree={w}
                 isExpanded={expanded.has(w.path)}
                 onToggle={() => toggle(expanded, setExpanded, w.path)}
+                onOpenPreview={onOpenPreview}
               />
             ))}
           </div>
@@ -188,10 +191,12 @@ function WorktreeRow({
   worktree,
   isExpanded,
   onToggle,
+  onOpenPreview,
 }: {
   worktree: WorktreeInfo;
   isExpanded: boolean;
   onToggle: () => void;
+  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
 }) {
   const branchLabel = worktree.branch ?? `(detached ${worktree.head.slice(0, 7)})`;
   const dirName = basename(worktree.path);
@@ -211,14 +216,10 @@ function WorktreeRow({
         {worktree.is_main && <span className="wt-row-main-badge">main</span>}
       </div>
       {isExpanded && (
-        <div
-          className="wt-row-changes-placeholder"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ padding: "6px 0", color: "var(--muted)", fontSize: 11 }}>
-            Changes coming in E3…
-          </div>
-        </div>
+        <WorktreeChanges
+          worktreePath={worktree.path}
+          onOpenPreview={onOpenPreview}
+        />
       )}
     </>
   );

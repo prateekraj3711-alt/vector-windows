@@ -506,11 +506,49 @@
         border-radius: 3px;
         padding: 0 5px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px;
       }
-      .wt-row-changes-placeholder {
-        padding: 0 10px 2px 36px;
-        border-left: 2px solid var(--elev-hi);
-        margin-left: 20px;
+      /* WorktreeChanges */
+      .wt-changes { padding: 4px 0 8px 0; background: var(--bg); }
+      .wt-changes-loading, .wt-changes-empty, .wt-changes-error { padding: 6px 14px; color: var(--muted); font-size: 11px; }
+      .wt-changes-error { color: #ff6b6b; }
+      .wt-changes-section { padding: 4px 0; }
+      .wt-changes-section-header {
+        display: flex; align-items: center; gap: 6px;
+        padding: 2px 14px;
+        font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+        color: var(--muted);
       }
+      .wt-changes-count {
+        margin-left: auto;
+        background: var(--elev-hi); color: var(--muted);
+        border-radius: 999px; padding: 0 5px; font-size: 9px;
+        font-variant-numeric: tabular-nums;
+      }
+      .wt-change-row {
+        display: flex; align-items: center; gap: 6px;
+        padding: 2px 14px 2px 18px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .wt-change-row:hover { background: var(--elev-hi); }
+      .wt-change-status {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 14px; height: 14px;
+        border-radius: 3px;
+        font-size: 9px; font-weight: 600; font-family: "JetBrains Mono", monospace;
+        flex: 0 0 auto;
+        background: var(--elev-hi); color: var(--muted);
+      }
+      .wt-change-status-M { background: rgba(106, 141, 255, 0.20); color: #6a8dff; }
+      .wt-change-status-A { background: rgba(80, 200, 100, 0.20); color: #50c864; }
+      .wt-change-status-D { background: rgba(255, 90, 90, 0.20); color: #ff5a5a; }
+      .wt-change-status-U { background: rgba(255, 179, 71, 0.20); color: #ffb347; }
+      .wt-change-status-R { background: rgba(180, 120, 220, 0.20); color: #b478dc; }
+      .wt-change-status-C { background: rgba(180, 120, 220, 0.20); color: #b478dc; }
+      .wt-change-name { color: var(--fg); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .wt-change-dir { color: var(--muted); font-size: 11px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .wt-change-counts { display: inline-flex; gap: 4px; flex: 0 0 auto; font-size: 10px; font-family: "JetBrains Mono", monospace; }
+      .wt-change-add { color: #50c864; }
+      .wt-change-del { color: #ff5a5a; }
 
       /* Diff renderer */
       .diff-renderer { font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.5; padding: 6px 0; user-select: text; }

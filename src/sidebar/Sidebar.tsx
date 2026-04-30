@@ -58,7 +58,7 @@ export function Sidebar({
   onOpenSettings?: () => void;
   projectRoot?: string | null;
   sessionId?: string | null;
-  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
+  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
 }) {
   const { state, update, hydrated } = useSidebarState();
   const { sidebar_collapsed, sidebar_active_tab, sidebar_width } = state;
@@ -133,6 +133,7 @@ export function Sidebar({
               <WorktreesView
                 projectRoot={projectRoot ?? null}
                 sessionId={sessionId ?? null}
+                onOpenPreview={onOpenPreview}
               />
             )}
           </div>
