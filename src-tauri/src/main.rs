@@ -181,14 +181,35 @@ async fn start_session(
         .map_err(|e| e.to_string())?;
 
     if let Some(root) = watch_root {
+        // Manual pins set is empty at spawn — cheap, init synchronously.
+        state.session_manual_pins.lock().insert(session_id.clone(), Default::default());
+
+        // Worktree discovery + HEAD/dirty snapshot can take seconds on large
+        // multi-repo projects (SpringVerify, etc.). Running this synchronously
+        // would block start_session and delay the agent spawn. Run it on a
+        // background thread; the agent starts immediately.
+        //
+        // Until the snapshot is inserted, `session_snapshots` has no entry for
+        // this session — `list_linked_worktrees` treats that as "pending" and
+        // returns empty (everything renders as unlinked, which is harmless).
+        let app_for_snapshot = app.clone();
+        let session_id_for_snapshot = session_id.clone();
+        let root_for_snapshot = root.clone();
+        std::thread::spawn(move || {
+            let worktrees = worktree_session::discover_worktrees(&root_for_snapshot);
+            let snapshot = worktree_session::take_snapshot(&worktrees);
+            // Session may have been killed mid-discovery; only insert if the
+            // session is still alive (manual_pins is the liveness sentinel).
+            let st = app_for_snapshot.state::<AppState>();
+            if st.session_manual_pins.lock().contains_key(&session_id_for_snapshot) {
+                st.session_snapshots.lock().insert(session_id_for_snapshot, snapshot);
+            }
+        });
+
         match fs_watch::start_watcher(session_id.clone(), root.clone(), app) {
             Ok(handle) => { state.watchers.lock().insert(session_id.clone(), handle); }
             Err(e) => eprintln!("Failed to start fs watcher for {session_id}: {e}"),
         }
-        let worktrees = worktree_session::discover_worktrees(&root);
-        let snapshot = worktree_session::take_snapshot(&worktrees);
-        state.session_snapshots.lock().insert(session_id.clone(), snapshot);
-        state.session_manual_pins.lock().insert(session_id.clone(), Default::default());
     }
 
     Ok(())

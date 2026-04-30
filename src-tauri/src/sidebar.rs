@@ -108,9 +108,16 @@ pub fn list_linked_worktrees(
     session_id: String,
     project_root: PathBuf,
 ) -> Result<Vec<PathBuf>, String> {
+    // Missing snapshot = background discovery still in progress. Return empty
+    // so the frontend renders everything as unlinked (the safe default) until
+    // the snapshot arrives, instead of treating every worktree as "new since
+    // spawn" (which compute_linked would do on an empty snapshot).
     let snapshot = {
         let snaps = state.session_snapshots.lock();
-        snaps.get(&session_id).cloned().unwrap_or_default()
+        match snaps.get(&session_id) {
+            Some(s) => s.clone(),
+            None => return Ok(Vec::new()),
+        }
     };
     let manual_pins = {
         let pins = state.session_manual_pins.lock();
