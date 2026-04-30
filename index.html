@@ -440,6 +440,21 @@
 
       /* Worktrees view */
       .wt-view { padding: 4px 0; user-select: none; font-size: 12.5px; }
+      .wt-search { position: sticky; top: 0; z-index: 1; background: var(--bg); padding: 6px 8px; display: flex; gap: 4px; align-items: center; border-bottom: 1px solid var(--border); }
+      .wt-search-input {
+        flex: 1; background: var(--elev); border: 1px solid var(--border); color: var(--fg);
+        border-radius: 4px; padding: 0 8px; height: 24px; font-size: 12px;
+        outline: none; box-sizing: border-box;
+      }
+      .wt-search-input:focus { border-color: rgba(255, 138, 76, 0.55); }
+      .wt-search-input::placeholder { color: var(--muted); }
+      .wt-search-clear {
+        background: transparent; border: 0; color: var(--muted); cursor: pointer;
+        font-size: 14px; line-height: 1; padding: 0 6px; height: 24px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border-radius: 3px;
+      }
+      .wt-search-clear:hover { background: var(--elev-hi); color: var(--fg); }
       .wt-loading, .wt-empty, .wt-error {
         padding: 12px; color: var(--muted); font-size: 12px;
       }

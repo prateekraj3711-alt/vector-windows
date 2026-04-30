@@ -24,6 +24,7 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const projectRootRef = useRef(projectRoot);
   const sessionIdRef = useRef(sessionId);
@@ -101,36 +102,74 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
     return <div className="wt-empty">No git repos found in this project.</div>;
   }
 
+  const q = query.trim().toLowerCase();
+  const matches = (w: WorktreeInfo) => {
+    if (!q) return true;
+    const branch = (w.branch ?? "").toLowerCase();
+    const dir = basename(w.path).toLowerCase();
+    return branch.includes(q) || dir.includes(q);
+  };
+
+  const filteredGroups = groups
+    .map((g) => {
+      const sortedWts = [...g.worktrees].sort((a, b) => {
+        if (a.is_main && !b.is_main) return -1;
+        if (!a.is_main && b.is_main) return 1;
+        const an = a.branch ?? basename(a.path);
+        const bn = b.branch ?? basename(b.path);
+        return an.localeCompare(bn);
+      });
+      const visibleWts = q ? sortedWts.filter(matches) : sortedWts;
+      return { ...g, sortedWts, visibleWts };
+    })
+    // Hide repo groups with no visible worktrees AND no error to surface.
+    .filter((g) => g.visibleWts.length > 0 || g.error);
+
   return (
     <div className="wt-view">
-      {groups.map((g) => {
-        const sortedWts = [...g.worktrees].sort((a, b) => {
-          if (a.is_main && !b.is_main) return -1;
-          if (!a.is_main && b.is_main) return 1;
-          const an = a.branch ?? basename(a.path);
-          const bn = b.branch ?? basename(b.path);
-          return an.localeCompare(bn);
-        });
-        return (
-          <div key={g.repo} className="wt-group">
-            <div className="wt-group-header" title={g.repo}>
-              <span className="wt-group-name">{basename(g.repo)}</span>
-              <span className="wt-group-count">{g.worktrees.length}</span>
-            </div>
-            {g.error && (
-              <div className="wt-group-error" title={g.error}>{g.error}</div>
-            )}
-            {sortedWts.map((w) => (
-              <WorktreeRow
-                key={w.path}
-                worktree={w}
-                isExpanded={expanded.has(w.path)}
-                onToggle={() => toggle(expanded, setExpanded, w.path)}
-              />
-            ))}
+      <div className="wt-search">
+        <input
+          className="wt-search-input"
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search worktrees…"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        {query && (
+          <button
+            className="wt-search-clear"
+            onClick={() => setQuery("")}
+            aria-label="Clear search"
+            title="Clear"
+          >×</button>
+        )}
+      </div>
+      {filteredGroups.length === 0 && q && (
+        <div className="wt-empty">No worktrees match "{query}"</div>
+      )}
+      {filteredGroups.map((g) => (
+        <div key={g.repo} className="wt-group">
+          <div className="wt-group-header" title={g.repo}>
+            <span className="wt-group-name">{basename(g.repo)}</span>
+            <span className="wt-group-count">
+              {q ? `${g.visibleWts.length}/${g.worktrees.length}` : g.worktrees.length}
+            </span>
           </div>
-        );
-      })}
+          {g.error && (
+            <div className="wt-group-error" title={g.error}>{g.error}</div>
+          )}
+          {g.visibleWts.map((w) => (
+            <WorktreeRow
+              key={w.path}
+              worktree={w}
+              isExpanded={expanded.has(w.path)}
+              onToggle={() => toggle(expanded, setExpanded, w.path)}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
