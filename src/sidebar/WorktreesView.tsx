@@ -12,6 +12,7 @@ type WorktreeInfo = {
 type RepoGroup = {
   repo: string;
   worktrees: WorktreeInfo[];
+  error: string | null;
 };
 
 type Props = {
@@ -42,21 +43,34 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
     setError(null);
     try {
       const repos = await invoke<string[]>("list_repos_in_project", { root });
+      // Per-repo isolation: a broken repo (corrupted worktree metadata, missing
+      // refs, etc.) should not poison the whole view. Catch each invoke
+      // individually and surface the error on its group.
       const groupResults = await Promise.all(
-        repos.map(async (repo) => ({
-          repo,
-          worktrees: await invoke<WorktreeInfo[]>("list_worktrees_for_repo", { repo }),
-        })),
+        repos.map(async (repo): Promise<RepoGroup> => {
+          try {
+            const worktrees = await invoke<WorktreeInfo[]>("list_worktrees_for_repo", { repo });
+            return { repo, worktrees, error: null };
+          } catch (e: unknown) {
+            const err = e as { message?: string };
+            return { repo, worktrees: [], error: String(err?.message ?? e) };
+          }
+        }),
       );
       groupResults.sort((a, b) => basename(a.repo).localeCompare(basename(b.repo)));
       setGroups(groupResults);
 
       if (sid) {
-        const linkedList = await invoke<string[]>("list_linked_worktrees", {
-          sessionId: sid,
-          projectRoot: root,
-        });
-        setLinked(new Set(linkedList));
+        try {
+          const linkedList = await invoke<string[]>("list_linked_worktrees", {
+            sessionId: sid,
+            projectRoot: root,
+          });
+          setLinked(new Set(linkedList));
+        } catch {
+          // Linked detection failure is non-fatal — render everything as unlinked.
+          setLinked(new Set());
+        }
       } else {
         setLinked(new Set());
       }
@@ -121,6 +135,9 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
               <span className="wt-group-name">{basename(g.repo)}</span>
               <span className="wt-group-count">{g.worktrees.length}</span>
             </div>
+            {g.error && (
+              <div className="wt-group-error" title={g.error}>{g.error}</div>
+            )}
             {linkedWts.length === 0 && unlinkedWts.length > 0 && !showAll && (
               <div className="wt-empty-linked">No linked worktrees</div>
             )}
