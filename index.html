@@ -512,6 +512,22 @@
         margin-left: 20px;
       }
 
+      /* Diff renderer */
+      .diff-renderer { font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.5; padding: 6px 0; user-select: text; }
+      .diff-loading, .diff-empty, .diff-error { padding: 12px; color: var(--muted); font-size: 12px; }
+      .diff-error { color: #ff6b6b; }
+      .diff-line { display: flex; min-height: 18px; padding-left: 4px; padding-right: 12px; }
+      .diff-line.diff-meta { color: var(--muted); font-size: 11px; padding-left: 8px; }
+      .diff-line.diff-hunk { background: rgba(106, 141, 255, 0.08); color: #6a8dff; padding-left: 8px; }
+      .diff-line.diff-add { background: rgba(80, 200, 100, 0.10); }
+      .diff-line.diff-del { background: rgba(255, 90, 90, 0.10); }
+      .diff-line.diff-context { color: var(--fg); }
+      .diff-gutter { display: inline-block; width: 14px; flex: 0 0 auto; text-align: center; color: var(--muted); user-select: none; }
+      .diff-line.diff-add .diff-gutter { color: #50c864; }
+      .diff-line.diff-del .diff-gutter { color: #ff5a5a; }
+      .diff-content { white-space: pre; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+      .diff-content pre, .diff-content code { background: transparent !important; margin: 0; padding: 0; font: inherit; }
+
       /* Right-click context menu for file viewer */
       .file-context-menu {
         background: var(--elev); border: 1px solid var(--border); border-radius: 6px;

@@ -2829,6 +2829,8 @@ function PaneView(props: PaneViewProps) {
                   jumpCol={leaf.jumpCol}
                   theme={themeKind}
                   hideInlineActions={!single}
+                  mode={leaf.mode}
+                  baseRef={leaf.baseRef}
                 />
               </div>
             </div>

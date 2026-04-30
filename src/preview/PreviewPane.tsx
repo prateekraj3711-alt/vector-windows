@@ -12,6 +12,7 @@ import { MermaidRenderer } from "./MermaidRenderer";
 import { PdfRenderer } from "./PdfRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { PathContextMenu } from "./contextMenu";
+import { DiffRenderer } from "./DiffRenderer";
 
 type ReadFileResult = {
   bytes: number[];
@@ -37,10 +38,12 @@ export type PreviewLeafProps = {
   jumpCol?: number;
   theme: "dark" | "light";
   hideInlineActions?: boolean;
+  mode?: "file" | "diff";
+  baseRef?: string;
 };
 
 export const PreviewPane = forwardRef<PreviewPaneHandle, PreviewLeafProps>(function PreviewPane(props, ref) {
-  const { filePath, jumpLine, jumpCol, theme, hideInlineActions } = props;
+  const { filePath, jumpLine, jumpCol, theme, hideInlineActions, mode, baseRef } = props;
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -74,6 +77,61 @@ export const PreviewPane = forwardRef<PreviewPaneHandle, PreviewLeafProps>(funct
   useEffect(() => {
     void load();
   }, [load, reloadKey]);
+
+  if (mode === "diff") {
+    return (
+      <div
+        style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff", position: "relative" }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        {!hideInlineActions && (
+          <button
+            type="button"
+            title="Actions"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setMenu({ x: r.right, y: r.bottom });
+            }}
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 8,
+              zIndex: 5,
+              background: "transparent",
+              color: theme === "dark" ? "#888" : "#666",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+              padding: "2px 6px",
+              borderRadius: 3,
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+          >
+            ⋯
+          </button>
+        )}
+        <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
+          <DiffRenderer filePath={filePath} baseRef={baseRef} theme={theme} />
+        </div>
+        {menu && (
+          <PathContextMenu
+            target={{ absPath: filePath }}
+            x={menu.x}
+            y={menu.y}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
