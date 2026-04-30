@@ -1364,6 +1364,7 @@ export default function App() {
         onOpenSettings={() => { setSettingsSection("appearance"); setSettingsOpen(true); }}
         projectRoot={activePty?.cwd ?? null}
         sessionId={activePty?.id ?? null}
+        onOpenPreview={openPreview}
       />
       {update && (
         <div className="update-banner">

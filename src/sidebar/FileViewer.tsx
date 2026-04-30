@@ -9,6 +9,7 @@ type Props = {
   projectRoot: string | null;
   showHidden: boolean;
   sessionId: string | null;
+  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
 };
 
 type NodeState = {
@@ -33,7 +34,7 @@ function chevron(expanded: boolean) {
   );
 }
 
-export function FileViewer({ projectRoot, showHidden, sessionId }: Props) {
+export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview }: Props) {
   // Map<path, NodeState> for every expanded or loading folder
   const nodeStateRef = useRef<Map<string, NodeState>>(new Map());
   const [, forceUpdate] = useState(0);
@@ -189,6 +190,7 @@ export function FileViewer({ projectRoot, showHidden, sessionId }: Props) {
           depth={0}
           nodeStateRef={nodeStateRef}
           toggleFolder={toggleFolder}
+          onOpenPreview={onOpenPreview}
         />
       ))}
     </div>
@@ -200,21 +202,29 @@ function FileTreeNode({
   depth,
   nodeStateRef,
   toggleFolder,
+  onOpenPreview,
 }: {
   entry: DirEntry;
   depth: number;
   nodeStateRef: React.MutableRefObject<Map<string, NodeState>>;
   toggleFolder: (entry: DirEntry) => void;
+  onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
 }) {
   const ns = nodeStateRef.current.get(entry.path);
   const isExpanded = entry.is_dir && ns?.expanded === true;
   const indent = depth * 14 + 8; // px left padding per depth level
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent) => {
     if (entry.is_dir) {
       toggleFolder(entry);
+      return;
     }
-    // TODO (D2): else openPreview(entry.path)
+    if (!onOpenPreview) return;
+    if (e.metaKey && e.shiftKey) {
+      onOpenPreview(entry.path, undefined, undefined, { pin: true });
+    } else {
+      onOpenPreview(entry.path, undefined, undefined, { pin: false });
+    }
   };
 
   return (
@@ -222,7 +232,7 @@ function FileTreeNode({
       <div
         className="file-row"
         style={{ paddingLeft: indent }}
-        onClick={handleClick}
+        onClick={(e) => handleClick(e)}
         title={entry.path}
       >
         <span className="file-row-chevron">
@@ -253,6 +263,7 @@ function FileTreeNode({
               depth={depth + 1}
               nodeStateRef={nodeStateRef}
               toggleFolder={toggleFolder}
+              onOpenPreview={onOpenPreview}
             />
           ))}
         </>
