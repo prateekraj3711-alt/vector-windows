@@ -1360,7 +1360,11 @@ export default function App() {
 
   return (
     <>
-      <Sidebar onOpenSettings={() => { setSettingsSection("appearance"); setSettingsOpen(true); }} />
+      <Sidebar
+        onOpenSettings={() => { setSettingsSection("appearance"); setSettingsOpen(true); }}
+        projectRoot={activePty?.cwd ?? null}
+        sessionId={activePty?.id ?? null}
+      />
       {update && (
         <div className="update-banner">
           <div className="update-row">
