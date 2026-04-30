@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
 import { useSidebarState, SidebarTab } from "./sidebarState";
 import { FileViewer } from "./FileViewer";
+import { WorktreesView } from "./WorktreesView";
 
 const RAIL_WIDTH = 42;
 
@@ -129,7 +130,10 @@ export function Sidebar({
               />
             )}
             {sidebar_active_tab === "worktrees" && (
-              <div style={{ padding: 12, opacity: 0.5 }}>Worktrees (coming soon)</div>
+              <WorktreesView
+                projectRoot={projectRoot ?? null}
+                sessionId={sessionId ?? null}
+              />
             )}
           </div>
           <SidebarDivider

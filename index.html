@@ -438,6 +438,66 @@
       }
       .sidebar-divider:hover { background: #ff8a4c; opacity: 0.5; }
 
+      /* Worktrees view */
+      .wt-view { padding: 4px 0; user-select: none; font-size: 12.5px; }
+      .wt-loading, .wt-empty, .wt-error {
+        padding: 12px; color: var(--muted); font-size: 12px;
+      }
+      .wt-error { color: #ff6b6b; }
+      .wt-group { margin-bottom: 6px; }
+      .wt-group-header {
+        display: flex; align-items: center; gap: 6px;
+        padding: 4px 10px;
+        font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+        color: var(--muted);
+      }
+      .wt-group-name { font-weight: 600; color: var(--fg); text-transform: none; letter-spacing: 0; font-size: 12px; }
+      .wt-group-count {
+        margin-left: auto;
+        background: var(--elev-hi);
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 0 6px;
+        font-size: 10px;
+        font-variant-numeric: tabular-nums;
+      }
+      .wt-empty-linked {
+        padding: 4px 16px;
+        color: var(--muted);
+        font-size: 11px; font-style: italic;
+      }
+      .wt-row {
+        display: flex; align-items: center; gap: 6px;
+        padding: 3px 10px 3px 14px;
+        cursor: pointer;
+      }
+      .wt-row:hover { background: var(--elev-hi); }
+      .wt-row-unlinked { opacity: 0.55; }
+      .wt-row-unlinked:hover { opacity: 0.85; }
+      .wt-row-chevron { width: 10px; color: var(--muted); font-size: 9px; flex: 0 0 auto; }
+      .wt-row-dot { width: 6px; height: 6px; border-radius: 50%; background: #ff8a4c; flex: 0 0 auto; }
+      .wt-row-branch { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+      .wt-row-suffix { color: var(--muted); font-size: 11px; flex: 0 0 auto; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .wt-row-main-badge {
+        background: var(--elev-hi); color: var(--muted);
+        border-radius: 3px;
+        padding: 0 5px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px;
+      }
+      .wt-show-all {
+        background: transparent; border: 0; color: var(--muted);
+        font-size: 11px;
+        padding: 3px 14px;
+        cursor: pointer;
+        text-align: left;
+        width: 100%;
+      }
+      .wt-show-all:hover { color: var(--fg); background: var(--elev-hi); }
+      .wt-row-changes-placeholder {
+        padding: 0 10px 2px 36px;
+        border-left: 2px solid var(--elev-hi);
+        margin-left: 20px;
+      }
+
       /* Right-click context menu for file viewer */
       .file-context-menu {
         background: var(--elev); border: 1px solid var(--border); border-radius: 6px;
