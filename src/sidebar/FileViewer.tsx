@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FileIcon } from "./fileIcons";
+import { FileContextMenu, makeFileMenuItems } from "./contextMenu";
 
 type DirEntry = { name: string; path: string; is_dir: boolean };
 
@@ -44,6 +45,15 @@ export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview }
   const [rootEntries, setRootEntries] = useState<DirEntry[] | null>(null);
   const [rootLoading, setRootLoading] = useState(false);
   const [rootError, setRootError] = useState<string | null>(null);
+
+  // Context menu state
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: DirEntry } | null>(null);
+
+  const onRowContextMenu = useCallback((e: React.MouseEvent, entry: DirEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, entry });
+  }, []);
 
   // Track which paths are expanded (for fs-event refresh)
   const expandedRef = useRef<Set<string>>(new Set());
@@ -182,18 +192,29 @@ export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview }
   }
 
   return (
-    <div className="file-viewer">
-      {rootEntries.map((entry) => (
-        <FileTreeNode
-          key={entry.path}
-          entry={entry}
-          depth={0}
-          nodeStateRef={nodeStateRef}
-          toggleFolder={toggleFolder}
-          onOpenPreview={onOpenPreview}
+    <>
+      {menu && (
+        <FileContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={makeFileMenuItems(menu.entry.path, menu.entry.is_dir)}
+          onClose={() => setMenu(null)}
         />
-      ))}
-    </div>
+      )}
+      <div className="file-viewer">
+        {rootEntries.map((entry) => (
+          <FileTreeNode
+            key={entry.path}
+            entry={entry}
+            depth={0}
+            nodeStateRef={nodeStateRef}
+            toggleFolder={toggleFolder}
+            onOpenPreview={onOpenPreview}
+            onContextMenu={onRowContextMenu}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -203,12 +224,14 @@ function FileTreeNode({
   nodeStateRef,
   toggleFolder,
   onOpenPreview,
+  onContextMenu,
 }: {
   entry: DirEntry;
   depth: number;
   nodeStateRef: React.MutableRefObject<Map<string, NodeState>>;
   toggleFolder: (entry: DirEntry) => void;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
+  onContextMenu?: (e: React.MouseEvent, entry: DirEntry) => void;
 }) {
   const ns = nodeStateRef.current.get(entry.path);
   const isExpanded = entry.is_dir && ns?.expanded === true;
@@ -233,6 +256,7 @@ function FileTreeNode({
         className="file-row"
         style={{ paddingLeft: indent }}
         onClick={(e) => handleClick(e)}
+        onContextMenu={(e) => onContextMenu?.(e, entry)}
         title={entry.path}
       >
         <span className="file-row-chevron">
@@ -264,6 +288,7 @@ function FileTreeNode({
               nodeStateRef={nodeStateRef}
               toggleFolder={toggleFolder}
               onOpenPreview={onOpenPreview}
+              onContextMenu={onContextMenu}
             />
           ))}
         </>
