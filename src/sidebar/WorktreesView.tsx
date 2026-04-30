@@ -22,8 +22,6 @@ type Props = {
 
 export function WorktreesView({ projectRoot, sessionId }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
-  const [linked, setLinked] = useState<Set<string>>(new Set());
-  const [showAllByRepo, setShowAllByRepo] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
@@ -34,10 +32,8 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
 
   const refresh = async () => {
     const root = projectRootRef.current;
-    const sid = sessionIdRef.current;
     if (!root) {
       setGroups([]);
-      setLinked(new Set());
       return;
     }
     setError(null);
@@ -59,21 +55,6 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
       );
       groupResults.sort((a, b) => basename(a.repo).localeCompare(basename(b.repo)));
       setGroups(groupResults);
-
-      if (sid) {
-        try {
-          const linkedList = await invoke<string[]>("list_linked_worktrees", {
-            sessionId: sid,
-            projectRoot: root,
-          });
-          setLinked(new Set(linkedList));
-        } catch {
-          // Linked detection failure is non-fatal — render everything as unlinked.
-          setLinked(new Set());
-        }
-      } else {
-        setLinked(new Set());
-      }
     } catch (e: unknown) {
       const err = e as { message?: string };
       setError(String(err?.message ?? e));
@@ -82,9 +63,7 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
 
   useEffect(() => {
     setGroups(null);
-    setLinked(new Set());
     setExpanded(new Set());
-    setShowAllByRepo(new Set());
     void refresh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectRoot, sessionId]);
@@ -125,10 +104,13 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
   return (
     <div className="wt-view">
       {groups.map((g) => {
-        const linkedWts = g.worktrees.filter((w) => linked.has(w.path));
-        const unlinkedWts = g.worktrees.filter((w) => !linked.has(w.path));
-        const showAll = showAllByRepo.has(g.repo);
-
+        const sortedWts = [...g.worktrees].sort((a, b) => {
+          if (a.is_main && !b.is_main) return -1;
+          if (!a.is_main && b.is_main) return 1;
+          const an = a.branch ?? basename(a.path);
+          const bn = b.branch ?? basename(b.path);
+          return an.localeCompare(bn);
+        });
         return (
           <div key={g.repo} className="wt-group">
             <div className="wt-group-header" title={g.repo}>
@@ -138,38 +120,14 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
             {g.error && (
               <div className="wt-group-error" title={g.error}>{g.error}</div>
             )}
-            {linkedWts.length === 0 && unlinkedWts.length > 0 && !showAll && (
-              <div className="wt-empty-linked">No linked worktrees</div>
-            )}
-            {linkedWts.map((w) => (
+            {sortedWts.map((w) => (
               <WorktreeRow
                 key={w.path}
                 worktree={w}
-                projectRoot={projectRoot}
-                isLinked
                 isExpanded={expanded.has(w.path)}
                 onToggle={() => toggle(expanded, setExpanded, w.path)}
               />
             ))}
-            {unlinkedWts.length > 0 && (
-              <button
-                className="wt-show-all"
-                onClick={() => toggle(showAllByRepo, setShowAllByRepo, g.repo)}
-              >
-                {showAll ? "Hide" : `Show all (${unlinkedWts.length})`}
-              </button>
-            )}
-            {showAll &&
-              unlinkedWts.map((w) => (
-                <WorktreeRow
-                  key={w.path}
-                  worktree={w}
-                  projectRoot={projectRoot}
-                  isLinked={false}
-                  isExpanded={expanded.has(w.path)}
-                  onToggle={() => toggle(expanded, setExpanded, w.path)}
-                />
-              ))}
           </div>
         );
       })}
@@ -179,13 +137,10 @@ export function WorktreesView({ projectRoot, sessionId }: Props) {
 
 function WorktreeRow({
   worktree,
-  isLinked,
   isExpanded,
   onToggle,
 }: {
   worktree: WorktreeInfo;
-  projectRoot: string;
-  isLinked: boolean;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
@@ -196,12 +151,11 @@ function WorktreeRow({
   return (
     <>
       <div
-        className={`wt-row${isLinked ? " wt-row-linked" : " wt-row-unlinked"}${isExpanded ? " wt-row-expanded" : ""}`}
+        className={`wt-row${isExpanded ? " wt-row-expanded" : ""}`}
         onClick={onToggle}
         title={worktree.path}
       >
         <span className="wt-row-chevron">{isExpanded ? "▾" : "▸"}</span>
-        {isLinked && <span className="wt-row-dot" aria-hidden="true" />}
         <span className="wt-row-branch">{branchLabel}</span>
         {showSuffix && <span className="wt-row-suffix">{dirName}</span>}
         {worktree.is_main && <span className="wt-row-main-badge">main</span>}

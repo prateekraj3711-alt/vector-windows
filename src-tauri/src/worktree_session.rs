@@ -27,9 +27,14 @@ pub fn discover_repos(project_root: &Path) -> Vec<PathBuf> {
 
     while let Some((dir, depth)) = queue.pop() {
         let git_path = dir.join(".git");
-        if git_path.exists() {
+        if git_path.is_dir() {
             repos.push(dir);
             continue; // don't descend into a repo
+        }
+        if git_path.is_file() {
+            // .git file marker = worktree of some other repo. Don't count it
+            // as a repo, and don't descend into it either.
+            continue;
         }
         if depth >= 4 {
             continue;

@@ -54,47 +54,55 @@ const EDITORS: &[(&str, &str)] = &[
 /// List directory contents, optionally including hidden entries. Directories
 /// come first (alphabetically), then files (alphabetically).
 #[tauri::command]
-pub fn list_dir(path: PathBuf, show_hidden: bool) -> Result<Vec<DirEntry>, String> {
-    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+pub async fn list_dir(path: PathBuf, show_hidden: bool) -> Result<Vec<DirEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
 
-    let mut dirs: Vec<DirEntry> = Vec::new();
-    let mut files: Vec<DirEntry> = Vec::new();
+        let mut dirs: Vec<DirEntry> = Vec::new();
+        let mut files: Vec<DirEntry> = Vec::new();
 
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !show_hidden && name.starts_with('.') {
-            continue;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !show_hidden && name.starts_with('.') {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let entry = DirEntry {
+                name: name.clone(),
+                path: entry.path(),
+                is_dir,
+            };
+            if is_dir {
+                dirs.push(entry);
+            } else {
+                files.push(entry);
+            }
         }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let entry = DirEntry {
-            name: name.clone(),
-            path: entry.path(),
-            is_dir,
-        };
-        if is_dir {
-            dirs.push(entry);
-        } else {
-            files.push(entry);
-        }
-    }
 
-    dirs.sort_by(|a, b| a.name.cmp(&b.name));
-    files.sort_by(|a, b| a.name.cmp(&b.name));
-    dirs.extend(files);
-    Ok(dirs)
+        dirs.sort_by(|a, b| a.name.cmp(&b.name));
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        dirs.extend(files);
+        Ok(dirs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// BFS-walk `root` (same rules as `worktree_session::discover_worktrees`) and
 /// return only the repo roots (directories that contain a `.git` entry).
 #[tauri::command]
-pub fn list_repos_in_project(root: PathBuf) -> Result<Vec<PathBuf>, String> {
-    Ok(worktree_session::discover_repos(&root))
+pub async fn list_repos_in_project(root: PathBuf) -> Result<Vec<PathBuf>, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(worktree_session::discover_repos(&root)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Thin wrapper around `git::worktree_list`.
 #[tauri::command]
-pub fn list_worktrees_for_repo(repo: PathBuf) -> Result<Vec<git::WorktreeInfo>, String> {
-    git::worktree_list(&repo)
+pub async fn list_worktrees_for_repo(repo: PathBuf) -> Result<Vec<git::WorktreeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || git::worktree_list(&repo))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Return the set of worktrees "linked" to `session_id`.
@@ -103,7 +111,7 @@ pub fn list_worktrees_for_repo(repo: PathBuf) -> Result<Vec<git::WorktreeInfo>, 
 /// caller supplies `project_root` directly (matches the session's CWD at
 /// spawn time, which the frontend already tracks).
 #[tauri::command]
-pub fn list_linked_worktrees(
+pub async fn list_linked_worktrees(
     state: State<'_, AppState>,
     session_id: String,
     project_root: PathBuf,
@@ -112,83 +120,91 @@ pub fn list_linked_worktrees(
     // so the frontend renders everything as unlinked (the safe default) until
     // the snapshot arrives, instead of treating every worktree as "new since
     // spawn" (which compute_linked would do on an empty snapshot).
-    let snapshot = {
-        let snaps = state.session_snapshots.lock();
-        match snaps.get(&session_id) {
-            Some(s) => s.clone(),
-            None => return Ok(Vec::new()),
-        }
+    let snapshot = match state.session_snapshots.lock().get(&session_id) {
+        Some(s) => s.clone(),
+        None => return Ok(Vec::new()),
     };
-    let manual_pins = {
-        let pins = state.session_manual_pins.lock();
-        pins.get(&session_id).cloned().unwrap_or_default()
-    };
-    let current_worktrees = worktree_session::discover_worktrees(&project_root);
-    let linked = worktree_session::compute_linked(&snapshot, &current_worktrees, &manual_pins);
-    let mut result: Vec<PathBuf> = linked.into_iter().collect();
-    result.sort();
-    Ok(result)
+    let manual_pins = state.session_manual_pins.lock().get(&session_id).cloned().unwrap_or_default();
+
+    // The slow part — discover + compute. Off main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let current_worktrees = worktree_session::discover_worktrees(&project_root);
+        let linked = worktree_session::compute_linked(&snapshot, &current_worktrees, &manual_pins);
+        let mut result: Vec<PathBuf> = linked.into_iter().collect();
+        result.sort();
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Return uncommitted + committed changes for a worktree relative to a base
 /// branch. If `base_ref` is not provided, it is resolved automatically.
 #[tauri::command]
-pub fn worktree_changes(
+pub async fn worktree_changes(
     worktree: PathBuf,
     base_ref: Option<String>,
 ) -> Result<WorktreeChanges, String> {
-    let resolved_base = match base_ref {
-        Some(r) if !r.is_empty() => r,
-        _ => git::resolve_base_ref(&worktree)?,
-    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved_base = match base_ref {
+            Some(r) if !r.is_empty() => r,
+            _ => git::resolve_base_ref(&worktree)?,
+        };
 
-    let uncommitted: Vec<ChangeEntry> = git::status_porcelain(&worktree)?
-        .into_iter()
-        .map(|e| ChangeEntry {
-            path: e.path,
-            status: e.status,
-            additions: None,
-            deletions: None,
+        let uncommitted: Vec<ChangeEntry> = git::status_porcelain(&worktree)?
+            .into_iter()
+            .map(|e| ChangeEntry {
+                path: e.path,
+                status: e.status,
+                additions: None,
+                deletions: None,
+            })
+            .collect();
+
+        let committed: Vec<ChangeEntry> = git::diff_name_status(&worktree, &resolved_base)?
+            .into_iter()
+            .map(|e| ChangeEntry {
+                path: e.path,
+                status: e.status,
+                additions: e.additions,
+                deletions: e.deletions,
+            })
+            .collect();
+
+        Ok(WorktreeChanges {
+            uncommitted,
+            committed,
+            base_ref: resolved_base,
         })
-        .collect();
-
-    let committed: Vec<ChangeEntry> = git::diff_name_status(&worktree, &resolved_base)?
-        .into_iter()
-        .map(|e| ChangeEntry {
-            path: e.path,
-            status: e.status,
-            additions: e.additions,
-            deletions: e.deletions,
-        })
-        .collect();
-
-    Ok(WorktreeChanges {
-        uncommitted,
-        committed,
-        base_ref: resolved_base,
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Return raw diff text for a single file in a worktree.
 ///
 /// `base` is either `"head"` (unstaged diff) or `"base"` (diff against merge-base).
 #[tauri::command]
-pub fn worktree_diff(
+pub async fn worktree_diff(
     worktree: PathBuf,
     file: PathBuf,
     base: String,
     base_ref: Option<String>,
 ) -> Result<String, String> {
-    if base == "head" {
-        git::diff_file(&worktree, &file, git::DiffBase::Head, None)
-    } else {
-        // base == "base" — resolve the ref string
-        let resolved = match base_ref {
-            Some(r) if !r.is_empty() => r,
-            _ => git::resolve_base_ref(&worktree)?,
-        };
-        git::diff_file(&worktree, &file, git::DiffBase::Ref, Some(&resolved))
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if base == "head" {
+            git::diff_file(&worktree, &file, git::DiffBase::Head, None)
+        } else {
+            // base == "base" — resolve the ref string
+            let resolved = match base_ref {
+                Some(r) if !r.is_empty() => r,
+                _ => git::resolve_base_ref(&worktree)?,
+            };
+            git::diff_file(&worktree, &file, git::DiffBase::Ref, Some(&resolved))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Add or remove a manual pin for a worktree on a given session.
