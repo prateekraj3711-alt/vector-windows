@@ -118,6 +118,7 @@ type PreviewLeaf = {
   kind: "preview";
   id: string;
   cwd: string;
+  sessionId?: string; // id of the source PTY this preview was opened from (for fs-changed-{sessionId})
   filePath: string;
   jumpLine?: number;
   jumpCol?: number;
@@ -869,22 +870,30 @@ export default function App() {
         prev.map((tab) => {
           if (tab.id !== activeIdRef.current) return tab;
 
+          // Resolve the source PTY context (cwd + sessionId) from the currently focused leaf,
+          // falling back to the leaf's own embedded values when the focus is already a preview.
+          const focused = findLeaf(tab.root, tab.activePaneId);
+          const sourceSessionId = focused
+            ? (isPtyLeaf(focused) ? focused.id : focused.sessionId)
+            : undefined;
+          const sourceCwd = focused?.cwd ?? "/";
+
           if (!opts.pin) {
             const slot = findPreviewSlot(tab.root);
             if (slot) {
               const updatedRoot = mapLeaf(tab.root, slot.id, (leaf) => {
                 if (leaf.kind !== "preview") return leaf;
-                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col };
+                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col, cwd: sourceCwd, sessionId: sourceSessionId };
               });
               return { ...tab, root: updatedRoot, activePaneId: slot.id };
             }
           }
 
-          const cwd = getCwdForLeaf(tab.root, tab.activePaneId) ?? "/";
           const newLeaf: PreviewLeaf = {
             kind: "preview",
             id: crypto.randomUUID(),
-            cwd,
+            cwd: sourceCwd,
+            sessionId: sourceSessionId,
             filePath: absPath,
             jumpLine: line,
             jumpCol: col,
@@ -1362,8 +1371,12 @@ export default function App() {
     <>
       <Sidebar
         onOpenSettings={() => { setSettingsSection("appearance"); setSettingsOpen(true); }}
-        projectRoot={activePty?.cwd ?? null}
-        sessionId={activePty?.id ?? null}
+        projectRoot={activeLeaf?.cwd ?? null}
+        sessionId={
+          activeLeaf
+            ? (isPtyLeaf(activeLeaf) ? activeLeaf.id : (activeLeaf.sessionId ?? null))
+            : null
+        }
         onOpenPreview={openPreview}
       />
       {update && (
