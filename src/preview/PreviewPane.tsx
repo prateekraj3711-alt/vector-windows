@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { capForExtension, extOf, pickRenderer } from "./extensions";
 import { isLikelyBinary } from "./sniff";
@@ -27,20 +27,29 @@ type LoadState =
   | { status: "binary" }
   | { status: "error"; message: string };
 
+export type PreviewPaneHandle = {
+  openActions: (rect: DOMRect) => void;
+};
+
 export type PreviewLeafProps = {
   filePath: string;
   jumpLine?: number;
   jumpCol?: number;
   theme: "dark" | "light";
+  hideInlineActions?: boolean;
 };
 
-export function PreviewPane(props: PreviewLeafProps) {
-  const { filePath, jumpLine, jumpCol, theme } = props;
+export const PreviewPane = forwardRef<PreviewPaneHandle, PreviewLeafProps>(function PreviewPane(props, ref) {
+  const { filePath, jumpLine, jumpCol, theme, hideInlineActions } = props;
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const cap = capForExtension(extOf(filePath));
+
+  useImperativeHandle(ref, () => ({
+    openActions: (rect: DOMRect) => setMenu({ x: rect.right, y: rect.bottom }),
+  }), []);
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
@@ -75,34 +84,36 @@ export function PreviewPane(props: PreviewLeafProps) {
         setMenu({ x: e.clientX, y: e.clientY });
       }}
     >
-      <button
-        type="button"
-        title="Actions"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          setMenu({ x: r.right, y: r.bottom });
-        }}
-        style={{
-          position: "absolute",
-          top: 6,
-          right: 8,
-          zIndex: 5,
-          background: "transparent",
-          color: theme === "dark" ? "#888" : "#666",
-          border: "none",
-          cursor: "pointer",
-          fontSize: 16,
-          lineHeight: 1,
-          padding: "2px 6px",
-          borderRadius: 3,
-        }}
-        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
-        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
-      >
-        ⋯
-      </button>
+      {!hideInlineActions && (
+        <button
+          type="button"
+          title="Actions"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenu({ x: r.right, y: r.bottom });
+          }}
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 8,
+            zIndex: 5,
+            background: "transparent",
+            color: theme === "dark" ? "#888" : "#666",
+            border: "none",
+            cursor: "pointer",
+            fontSize: 16,
+            lineHeight: 1,
+            padding: "2px 6px",
+            borderRadius: 3,
+          }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+        >
+          ⋯
+        </button>
+      )}
       <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
         {state.status === "loading" && (
           <div style={{ padding: 16, color: "#888" }}>Loading…</div>
@@ -137,7 +148,7 @@ export function PreviewPane(props: PreviewLeafProps) {
       )}
     </div>
   );
-}
+});
 
 function RendererSwitch(props: {
   filePath: string;

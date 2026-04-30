@@ -17,7 +17,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
-import { PreviewPane } from "./preview/PreviewPane";
+import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
 import { Sidebar } from "./sidebar/Sidebar";
 
@@ -2652,6 +2652,7 @@ function PreviewPaneTitleBar({
   onClose,
   onDragStart,
   onDragEnd,
+  onActionsClick,
 }: {
   filePath: string;
   jumpLine?: number;
@@ -2660,6 +2661,7 @@ function PreviewPaneTitleBar({
   onClose: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onActionsClick?: (e: React.MouseEvent<HTMLElement>) => void;
 }) {
   const fileName = filePath.split("/").pop() || filePath;
   const suffix = jumpLine ? `:${jumpLine}${jumpCol ? `:${jumpCol}` : ""}` : "";
@@ -2674,6 +2676,14 @@ function PreviewPaneTitleBar({
     >
       <span className="pane-grip-dots">⋮⋮</span>
       <span className="pane-title-label">{fileName}{suffix}</span>
+      {onActionsClick && (
+        <span
+          className="pane-actions"
+          onClick={(e) => { e.stopPropagation(); onActionsClick(e); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          title="Actions"
+        >⋯</span>
+      )}
       {showClose && (
         <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
       )}
@@ -2714,6 +2724,7 @@ function PaneView(props: PaneViewProps) {
   const dividers = computeDividers(root, [0, 0, 1, 1]);
   const rectFor = (id: string) => rects.find((r) => r.id === id)!.rect;
   const single = leaves.length === 1;
+  const previewRefs = useRef<Map<string, PreviewPaneHandle>>(new Map());
 
   return (
     <div className="tab-panes-layout">
@@ -2773,14 +2784,23 @@ function PaneView(props: PaneViewProps) {
                     onPaneDragStart(leaf.id);
                   }}
                   onDragEnd={() => onPaneDragEnd()}
+                  onActionsClick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    previewRefs.current.get(leaf.id)?.openActions(r);
+                  }}
                 />
               )}
               <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
                 <PreviewPane
+                  ref={(handle) => {
+                    if (handle) previewRefs.current.set(leaf.id, handle);
+                    else previewRefs.current.delete(leaf.id);
+                  }}
                   filePath={leaf.filePath}
                   jumpLine={leaf.jumpLine}
                   jumpCol={leaf.jumpCol}
                   theme={themeKind}
+                  hideInlineActions={!single}
                 />
               </div>
             </div>
