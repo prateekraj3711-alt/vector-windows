@@ -417,7 +417,8 @@
         padding: 0; border-radius: 3px;
       }
       .sidebar-panel-action:hover { background: var(--elev-hi); color: var(--fg); }
-      .file-viewer { padding: 4px 0; font-size: 12.5px; user-select: none; flex: 1; }
+      .file-viewer { padding: 4px 0; font-size: 12.5px; user-select: none; -webkit-user-select: none; flex: 1; }
+      .file-viewer * { user-select: none; -webkit-user-select: none; }
       .file-viewer-loading, .file-viewer-empty, .file-viewer-error {
         padding: 12px; color: var(--muted); font-size: 12px;
       }

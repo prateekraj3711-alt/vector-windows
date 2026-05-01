@@ -259,7 +259,7 @@ function FileTreeNode({
       <div
         className={`file-row${!entry.is_dir && activePath === entry.path ? " file-row-active" : ""}`}
         style={{ paddingLeft: indent }}
-        onMouseDown={(e) => { if (e.button !== 0 || e.shiftKey) e.preventDefault(); }}
+        onMouseDownCapture={(e) => { if (e.button !== 0 || e.shiftKey) e.preventDefault(); }}
         onClick={(e) => handleClick(e)}
         onContextMenu={(e) => onContextMenu?.(e, entry)}
         title={entry.path}
