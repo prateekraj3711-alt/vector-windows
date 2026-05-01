@@ -23,9 +23,10 @@ type Props = {
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
   changesView: ChangesViewMode;
   onChangesView: (m: ChangesViewMode) => void;
+  activePath: string | null;
 };
 
-export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesView, onChangesView }: Props) {
+export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesView, onChangesView, activePath }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
@@ -219,6 +220,7 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesVi
                 onOpenPreview={onOpenPreview}
                 onContextMenu={(e) => onRowContextMenu(e, w.path)}
                 changesView={changesView}
+                activePath={activePath}
               />
             ))}
           </div>
@@ -255,6 +257,7 @@ function WorktreeRow({
   onOpenPreview,
   onContextMenu,
   changesView,
+  activePath,
 }: {
   worktree: WorktreeInfo;
   isExpanded: boolean;
@@ -262,6 +265,7 @@ function WorktreeRow({
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   changesView: ChangesViewMode;
+  activePath: string | null;
 }) {
   const branchLabel = worktree.branch ?? `(detached ${worktree.head.slice(0, 7)})`;
   const dirName = basename(worktree.path);
@@ -286,6 +290,7 @@ function WorktreeRow({
           worktreePath={worktree.path}
           viewMode={changesView}
           onOpenPreview={onOpenPreview}
+          activePath={activePath}
         />
       )}
     </>

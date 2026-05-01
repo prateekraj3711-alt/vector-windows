@@ -54,11 +54,13 @@ export function Sidebar({
   projectRoot,
   sessionId,
   onOpenPreview,
+  activePreviewPath,
 }: {
   onOpenSettings?: () => void;
   projectRoot?: string | null;
   sessionId?: string | null;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
+  activePreviewPath?: string | null;
 }) {
   const { state, update, hydrated } = useSidebarState();
   const { sidebar_collapsed, sidebar_active_tab, sidebar_width } = state;
@@ -127,6 +129,7 @@ export function Sidebar({
                 showHidden={state.show_hidden_files}
                 sessionId={sessionId ?? null}
                 onOpenPreview={onOpenPreview}
+                activePath={activePreviewPath ?? null}
               />
             )}
             {sidebar_active_tab === "worktrees" && (
@@ -136,6 +139,7 @@ export function Sidebar({
                 onOpenPreview={onOpenPreview}
                 changesView={state.worktrees_view_mode}
                 onChangesView={(m) => update({ worktrees_view_mode: m })}
+                activePath={activePreviewPath ?? null}
               />
             )}
           </div>

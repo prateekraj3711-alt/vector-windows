@@ -1406,6 +1406,7 @@ export default function App() {
             : null
         }
         onOpenPreview={openPreview}
+        activePreviewPath={activeLeaf && !isPtyLeaf(activeLeaf) ? activeLeaf.filePath : null}
       />
       {update && (
         <div className="update-banner">

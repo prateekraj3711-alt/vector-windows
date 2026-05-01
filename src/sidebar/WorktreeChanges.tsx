@@ -20,9 +20,10 @@ type Props = {
   worktreePath: string;
   viewMode: ChangesViewMode;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
+  activePath?: string | null;
 };
 
-export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview }: Props) {
+export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview, activePath }: Props) {
   const [changes, setChanges] = useState<Changes | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +61,12 @@ export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview }: Props
     }
   };
 
+  // Compute the relative path of the active preview (if it lives inside this
+  // worktree) so each row can compare its rel path and apply the active class.
+  const activeRel = activePath && activePath.startsWith(worktreePath + "/")
+    ? activePath.slice(worktreePath.length + 1)
+    : null;
+
   return (
     <div className="wt-changes" onMouseDown={(e) => e.preventDefault()}>
       {changes.uncommitted.length > 0 && (
@@ -69,6 +76,7 @@ export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview }: Props
           entries={changes.uncommitted}
           viewMode={viewMode}
           onClick={(rel) => openDiff(rel, "head")}
+          activeRel={activeRel}
         />
       )}
       {changes.committed.length > 0 && (
@@ -78,6 +86,7 @@ export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview }: Props
           entries={changes.committed}
           viewMode={viewMode}
           onClick={(rel) => openDiff(rel, "base")}
+          activeRel={activeRel}
         />
       )}
     </div>
@@ -90,12 +99,14 @@ function Section({
   entries,
   viewMode,
   onClick,
+  activeRel,
 }: {
   title: string;
   count: number;
   entries: ChangeEntry[];
   viewMode: ChangesViewMode;
   onClick: (path: string) => void;
+  activeRel: string | null;
 }) {
   return (
     <div className="wt-changes-section">
@@ -105,10 +116,15 @@ function Section({
       </div>
       {viewMode === "flat" ? (
         entries.map((e) => (
-          <ChangeRow key={e.path} entry={e} onClick={() => onClick(e.path)} />
+          <ChangeRow
+            key={e.path}
+            entry={e}
+            onClick={() => onClick(e.path)}
+            isActive={activeRel === e.path}
+          />
         ))
       ) : (
-        <TreeView entries={entries} onClick={onClick} />
+        <TreeView entries={entries} onClick={onClick} activeRel={activeRel} />
       )}
     </div>
   );
@@ -116,11 +132,16 @@ function Section({
 
 // ─── Flat row ─────────────────────────────────────────────────────────────────
 
-function ChangeRow({ entry, onClick }: { entry: ChangeEntry; onClick: () => void }) {
+function ChangeRow({ entry, onClick, isActive }: { entry: ChangeEntry; onClick: () => void; isActive: boolean }) {
   const fileName = entry.path.split("/").pop() ?? entry.path;
   const dir = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "";
   return (
-    <div className="wt-change-row" onClick={onClick} title={entry.path}>
+    <div
+      className={`wt-change-row${isActive ? " wt-change-row-active" : ""}`}
+      onMouseDown={(e) => { if (e.button !== 0) e.preventDefault(); }}
+      onClick={onClick}
+      title={entry.path}
+    >
       <span className={`wt-change-status wt-change-status-${entry.status.trim() || "?"}`}>{statusLabel(entry.status)}</span>
       <span className="wt-change-name">{fileName}</span>
       {dir && <span className="wt-change-dir">{dir}</span>}
@@ -189,13 +210,15 @@ function collapseSingleChildren(node: TreeNode): void {
   }
 }
 
-function TreeView({ entries, onClick }: { entries: ChangeEntry[]; onClick: (path: string) => void }) {
+function TreeView({
+  entries, onClick, activeRel,
+}: { entries: ChangeEntry[]; onClick: (path: string) => void; activeRel: string | null }) {
   const root = buildTree(entries);
   const sorted = sortChildren(root);
   return (
     <>
       {sorted.map((child) => (
-        <TreeBranch key={child.name} node={child} depth={0} onClick={onClick} />
+        <TreeBranch key={child.name} node={child} depth={0} onClick={onClick} activeRel={activeRel} />
       ))}
     </>
   );
@@ -212,15 +235,17 @@ function sortChildren(node: TreeNode): TreeNode[] {
 }
 
 function TreeBranch({
-  node, depth, onClick,
-}: { node: TreeNode; depth: number; onClick: (path: string) => void }) {
+  node, depth, onClick, activeRel,
+}: { node: TreeNode; depth: number; onClick: (path: string) => void; activeRel: string | null }) {
   const indent = 8 + depth * 12;
   if (node.entry) {
     const e = node.entry;
+    const isActive = activeRel === e.path;
     return (
       <div
-        className="wt-change-row"
+        className={`wt-change-row${isActive ? " wt-change-row-active" : ""}`}
         style={{ paddingLeft: indent }}
+        onMouseDown={(ev) => { if (ev.button !== 0) ev.preventDefault(); }}
         onClick={() => onClick(e.path)}
         title={e.path}
       >
@@ -244,7 +269,7 @@ function TreeBranch({
         <span className="wt-change-folder-name">{node.name}</span>
       </div>
       {children.map((c) => (
-        <TreeBranch key={c.name} node={c} depth={depth + 1} onClick={onClick} />
+        <TreeBranch key={c.name} node={c} depth={depth + 1} onClick={onClick} activeRel={activeRel} />
       ))}
     </>
   );

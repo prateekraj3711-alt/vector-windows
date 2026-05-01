@@ -11,6 +11,7 @@ type Props = {
   showHidden: boolean;
   sessionId: string | null;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
+  activePath?: string | null;
 };
 
 type NodeState = {
@@ -35,7 +36,7 @@ function chevron(expanded: boolean) {
   );
 }
 
-export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview }: Props) {
+export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview, activePath }: Props) {
   // Map<path, NodeState> for every expanded or loading folder
   const nodeStateRef = useRef<Map<string, NodeState>>(new Map());
   const [, forceUpdate] = useState(0);
@@ -211,6 +212,7 @@ export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview }
             toggleFolder={toggleFolder}
             onOpenPreview={onOpenPreview}
             onContextMenu={onRowContextMenu}
+            activePath={activePath ?? null}
           />
         ))}
       </div>
@@ -225,6 +227,7 @@ function FileTreeNode({
   toggleFolder,
   onOpenPreview,
   onContextMenu,
+  activePath,
 }: {
   entry: DirEntry;
   depth: number;
@@ -232,6 +235,7 @@ function FileTreeNode({
   toggleFolder: (entry: DirEntry) => void;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: DirEntry) => void;
+  activePath: string | null;
 }) {
   const ns = nodeStateRef.current.get(entry.path);
   const isExpanded = entry.is_dir && ns?.expanded === true;
@@ -253,9 +257,9 @@ function FileTreeNode({
   return (
     <>
       <div
-        className="file-row"
+        className={`file-row${!entry.is_dir && activePath === entry.path ? " file-row-active" : ""}`}
         style={{ paddingLeft: indent }}
-        onMouseDown={(e) => { if (e.shiftKey) e.preventDefault(); }}
+        onMouseDown={(e) => { if (e.button !== 0 || e.shiftKey) e.preventDefault(); }}
         onClick={(e) => handleClick(e)}
         onContextMenu={(e) => onContextMenu?.(e, entry)}
         title={entry.path}
@@ -290,6 +294,7 @@ function FileTreeNode({
               toggleFolder={toggleFolder}
               onOpenPreview={onOpenPreview}
               onContextMenu={onContextMenu}
+              activePath={activePath}
             />
           ))}
         </>
