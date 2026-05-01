@@ -86,8 +86,8 @@ export function FileViewer({ projectRoot, showHidden, sessionId, onOpenPreview, 
     if (!sessionId || !projectRoot) return;
     let unlisten: (() => void) | null = null;
 
-    listen<string[]>(`fs-changed-${sessionId}`, (event) => {
-      const changedPaths: string[] = event.payload ?? [];
+    listen<{ paths: string[] }>(`fs-changed-${sessionId}`, (event) => {
+      const changedPaths: string[] = event.payload?.paths ?? [];
 
       // Determine which expanded folders need refreshing
       const toRefresh = new Set<string>();
