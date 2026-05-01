@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { WorktreeChanges } from "./WorktreeChanges";
+import { FileContextMenu, makeWorktreeMenuItems, EditorInfo } from "./contextMenu";
 
 type WorktreeInfo = {
   path: string;
@@ -28,6 +29,14 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [editors, setEditors] = useState<EditorInfo[]>([]);
+  const [menu, setMenu] = useState<{ x: number; y: number; worktreePath: string } | null>(null);
+
+  useEffect(() => {
+    invoke<EditorInfo[]>("installed_editors")
+      .then(setEditors)
+      .catch(() => setEditors([]));
+  }, []);
 
   const projectRootRef = useRef(projectRoot);
   const sessionIdRef = useRef(sessionId);
@@ -128,8 +137,22 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
     // Hide repo groups with no visible worktrees AND no error to surface.
     .filter((g) => g.visibleWts.length > 0 || g.error);
 
+  const onRowContextMenu = (e: React.MouseEvent, worktreePath: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, worktreePath });
+  };
+
   return (
     <div className="wt-view">
+      {menu && (
+        <FileContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={makeWorktreeMenuItems(menu.worktreePath, editors)}
+          onClose={() => setMenu(null)}
+        />
+      )}
       <div className="wt-search">
         <input
           className="wt-search-input"
@@ -178,6 +201,7 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
                 isExpanded={expanded.has(w.path)}
                 onToggle={() => toggle(expanded, setExpanded, w.path)}
                 onOpenPreview={onOpenPreview}
+                onContextMenu={(e) => onRowContextMenu(e, w.path)}
               />
             ))}
           </div>
@@ -192,11 +216,13 @@ function WorktreeRow({
   isExpanded,
   onToggle,
   onOpenPreview,
+  onContextMenu,
 }: {
   worktree: WorktreeInfo;
   isExpanded: boolean;
   onToggle: () => void;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const branchLabel = worktree.branch ?? `(detached ${worktree.head.slice(0, 7)})`;
   const dirName = basename(worktree.path);
@@ -208,6 +234,7 @@ function WorktreeRow({
         className={`wt-row${isExpanded ? " wt-row-expanded" : ""}`}
         onMouseDown={(e) => e.preventDefault()}
         onClick={onToggle}
+        onContextMenu={onContextMenu}
         title={worktree.path}
       >
         <span className="wt-row-chevron">{isExpanded ? "▾" : "▸"}</span>

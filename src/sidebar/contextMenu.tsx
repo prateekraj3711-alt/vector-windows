@@ -60,6 +60,36 @@ export function FileContextMenu({
   );
 }
 
+export type EditorInfo = { bundle_id: string; display_name: string };
+
+export function makeWorktreeMenuItems(
+  worktreePath: string,
+  editors: EditorInfo[],
+): FileMenuItem[] {
+  const items: FileMenuItem[] = [];
+  for (const ed of editors) {
+    items.push({
+      label: `Open in ${ed.display_name}`,
+      onClick: () => {
+        invoke("open_in_editor", { bundleId: ed.bundle_id, path: worktreePath }).catch(() => {});
+      },
+    });
+  }
+  items.push({
+    label: "Reveal in Finder",
+    onClick: () => {
+      invoke("reveal_in_finder", { path: worktreePath }).catch(() => {});
+    },
+  });
+  items.push({
+    label: "Copy Path",
+    onClick: () => {
+      navigator.clipboard.writeText(worktreePath).catch(() => {});
+    },
+  });
+  return items;
+}
+
 export function makeFileMenuItems(path: string, isDir: boolean): FileMenuItem[] {
   const items: FileMenuItem[] = [
     {
