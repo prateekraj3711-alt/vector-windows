@@ -172,6 +172,20 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
             title="Clear"
           >×</button>
         )}
+        <div className="wt-search-views">
+          <button
+            className={`wt-changes-view-btn${changesView === "flat" ? " active" : ""}`}
+            onClick={() => setChangesView("flat")}
+            title="Flat list"
+            aria-label="Flat list"
+          ><FlatIcon /></button>
+          <button
+            className={`wt-changes-view-btn${changesView === "tree" ? " active" : ""}`}
+            onClick={() => setChangesView("tree")}
+            title="Tree view"
+            aria-label="Tree view"
+          ><TreeIcon /></button>
+        </div>
       </div>
       {filteredGroups.length === 0 && q && (
         <div className="wt-empty">No worktrees match "{query}"</div>
@@ -204,13 +218,32 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
                 onOpenPreview={onOpenPreview}
                 onContextMenu={(e) => onRowContextMenu(e, w.path)}
                 changesView={changesView}
-                onChangeChangesView={setChangesView}
               />
             ))}
           </div>
         );
       })}
     </div>
+  );
+}
+
+function FlatIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="18" x2="20" y2="18" />
+    </svg>
+  );
+}
+
+function TreeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="4" y1="6" x2="20" y2="6" />
+      <line x1="9" y1="12" x2="20" y2="12" />
+      <line x1="14" y1="18" x2="20" y2="18" />
+    </svg>
   );
 }
 
@@ -221,7 +254,6 @@ function WorktreeRow({
   onOpenPreview,
   onContextMenu,
   changesView,
-  onChangeChangesView,
 }: {
   worktree: WorktreeInfo;
   isExpanded: boolean;
@@ -229,7 +261,6 @@ function WorktreeRow({
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   changesView: ChangesViewMode;
-  onChangeChangesView: (m: ChangesViewMode) => void;
 }) {
   const branchLabel = worktree.branch ?? `(detached ${worktree.head.slice(0, 7)})`;
   const dirName = basename(worktree.path);
@@ -253,7 +284,6 @@ function WorktreeRow({
         <WorktreeChanges
           worktreePath={worktree.path}
           viewMode={changesView}
-          onChangeViewMode={onChangeChangesView}
           onOpenPreview={onOpenPreview}
         />
       )}

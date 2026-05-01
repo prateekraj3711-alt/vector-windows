@@ -19,11 +19,10 @@ export type ChangesViewMode = "flat" | "tree";
 type Props = {
   worktreePath: string;
   viewMode: ChangesViewMode;
-  onChangeViewMode: (m: ChangesViewMode) => void;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
 };
 
-export function WorktreeChanges({ worktreePath, viewMode, onChangeViewMode, onOpenPreview }: Props) {
+export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview }: Props) {
   const [changes, setChanges] = useState<Changes | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,20 +62,6 @@ export function WorktreeChanges({ worktreePath, viewMode, onChangeViewMode, onOp
 
   return (
     <div className="wt-changes" onMouseDown={(e) => e.preventDefault()}>
-      <div className="wt-changes-toolbar">
-        <button
-          className={`wt-changes-view-btn${viewMode === "flat" ? " active" : ""}`}
-          onClick={() => onChangeViewMode("flat")}
-          title="Flat list"
-          aria-label="Flat list"
-        ><FlatIcon /></button>
-        <button
-          className={`wt-changes-view-btn${viewMode === "tree" ? " active" : ""}`}
-          onClick={() => onChangeViewMode("tree")}
-          title="Tree view"
-          aria-label="Tree view"
-        ><TreeIcon /></button>
-      </div>
       {changes.uncommitted.length > 0 && (
         <Section
           title="Uncommitted"
@@ -265,27 +250,6 @@ function TreeBranch({
   );
 }
 
-// ─── Icons ────────────────────────────────────────────────────────────────────
-
-function FlatIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="4" y1="6" x2="20" y2="6" />
-      <line x1="4" y1="12" x2="20" y2="12" />
-      <line x1="4" y1="18" x2="20" y2="18" />
-    </svg>
-  );
-}
-
-function TreeIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="4" y1="6" x2="20" y2="6" />
-      <line x1="9" y1="12" x2="20" y2="12" />
-      <line x1="14" y1="18" x2="20" y2="18" />
-    </svg>
-  );
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
