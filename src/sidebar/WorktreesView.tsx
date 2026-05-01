@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { WorktreeChanges } from "./WorktreeChanges";
+import { WorktreeChanges, type ChangesViewMode } from "./WorktreeChanges";
 import { FileContextMenu, makeWorktreeMenuItems, EditorInfo } from "./contextMenu";
 
 type WorktreeInfo = {
@@ -30,6 +30,7 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editors, setEditors] = useState<EditorInfo[]>([]);
+  const [changesView, setChangesView] = useState<ChangesViewMode>("flat");
   const [menu, setMenu] = useState<{ x: number; y: number; worktreePath: string } | null>(null);
 
   useEffect(() => {
@@ -202,6 +203,8 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
                 onToggle={() => toggle(expanded, setExpanded, w.path)}
                 onOpenPreview={onOpenPreview}
                 onContextMenu={(e) => onRowContextMenu(e, w.path)}
+                changesView={changesView}
+                onChangeChangesView={setChangesView}
               />
             ))}
           </div>
@@ -217,12 +220,16 @@ function WorktreeRow({
   onToggle,
   onOpenPreview,
   onContextMenu,
+  changesView,
+  onChangeChangesView,
 }: {
   worktree: WorktreeInfo;
   isExpanded: boolean;
   onToggle: () => void;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  changesView: ChangesViewMode;
+  onChangeChangesView: (m: ChangesViewMode) => void;
 }) {
   const branchLabel = worktree.branch ?? `(detached ${worktree.head.slice(0, 7)})`;
   const dirName = basename(worktree.path);
@@ -245,6 +252,8 @@ function WorktreeRow({
       {isExpanded && (
         <WorktreeChanges
           worktreePath={worktree.path}
+          viewMode={changesView}
+          onChangeViewMode={onChangeChangesView}
           onOpenPreview={onOpenPreview}
         />
       )}
