@@ -145,7 +145,7 @@ async function findWorktreeRoot(filePath: string): Promise<string | null> {
   let dir = filePath.replace(/\/[^/]+$/, "");
   while (dir && dir !== "/") {
     try {
-      const info = await invoke<unknown>("path_exists", { abs_path: `${dir}/.git` });
+      const info = await invoke<unknown>("path_exists", { absPath: `${dir}/.git` });
       if (info) return dir;
     } catch {
       // swallow
