@@ -134,6 +134,8 @@ export function Sidebar({
                 projectRoot={projectRoot ?? null}
                 sessionId={sessionId ?? null}
                 onOpenPreview={onOpenPreview}
+                changesView={state.worktrees_view_mode}
+                onChangesView={(m) => update({ worktrees_view_mode: m })}
               />
             )}
           </div>

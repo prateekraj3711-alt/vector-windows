@@ -21,16 +21,17 @@ type Props = {
   projectRoot: string | null;
   sessionId: string | null;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
+  changesView: ChangesViewMode;
+  onChangesView: (m: ChangesViewMode) => void;
 };
 
-export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) {
+export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesView, onChangesView }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editors, setEditors] = useState<EditorInfo[]>([]);
-  const [changesView, setChangesView] = useState<ChangesViewMode>("flat");
   const [menu, setMenu] = useState<{ x: number; y: number; worktreePath: string } | null>(null);
 
   useEffect(() => {
@@ -175,13 +176,13 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview }: Props) 
         <div className="wt-search-views">
           <button
             className={`wt-changes-view-btn${changesView === "flat" ? " active" : ""}`}
-            onClick={() => setChangesView("flat")}
+            onClick={() => onChangesView("flat")}
             title="Flat list"
             aria-label="Flat list"
           ><FlatIcon /></button>
           <button
             className={`wt-changes-view-btn${changesView === "tree" ? " active" : ""}`}
-            onClick={() => setChangesView("tree")}
+            onClick={() => onChangesView("tree")}
             title="Tree view"
             aria-label="Tree view"
           ><TreeIcon /></button>

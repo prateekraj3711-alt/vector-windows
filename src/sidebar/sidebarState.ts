@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 // SidebarTab values match the backend's #[serde(rename_all = "lowercase")] enum.
 export type SidebarTab = "files" | "worktrees";
+export type WorktreesViewMode = "flat" | "tree";
 
 // UiConfig has no rename_all — Rust serializes fields as snake_case.
 // get_ui_config returns snake_case JSON keys.
@@ -11,6 +12,7 @@ export type SidebarState = {
   sidebar_active_tab: SidebarTab;
   sidebar_width: number;
   show_hidden_files: boolean;
+  worktrees_view_mode: WorktreesViewMode;
 };
 
 
@@ -19,6 +21,7 @@ const DEFAULT: SidebarState = {
   sidebar_active_tab: "files",
   sidebar_width: 240,
   show_hidden_files: false,
+  worktrees_view_mode: "flat",
 };
 
 export function useSidebarState() {

@@ -55,6 +55,17 @@ impl Default for SidebarTab {
     fn default() -> Self { SidebarTab::Files }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreesViewMode {
+    Flat,
+    Tree,
+}
+
+impl Default for WorktreesViewMode {
+    fn default() -> Self { WorktreesViewMode::Flat }
+}
+
 fn default_sidebar_width() -> u32 { 240 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +78,8 @@ pub struct UiConfig {
     pub sidebar_width: u32,
     #[serde(default)]
     pub show_hidden_files: bool,
+    #[serde(default)]
+    pub worktrees_view_mode: WorktreesViewMode,
 }
 
 impl Default for UiConfig {
@@ -76,6 +89,7 @@ impl Default for UiConfig {
             sidebar_active_tab: SidebarTab::default(),
             sidebar_width: default_sidebar_width(),
             show_hidden_files: false,
+            worktrees_view_mode: WorktreesViewMode::default(),
         }
     }
 }

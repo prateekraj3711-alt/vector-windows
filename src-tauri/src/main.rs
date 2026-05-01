@@ -583,6 +583,7 @@ struct SidebarConfigPatch {
     sidebar_active_tab: Option<config::SidebarTab>,
     sidebar_width: Option<u32>,
     show_hidden_files: Option<bool>,
+    worktrees_view_mode: Option<config::WorktreesViewMode>,
 }
 
 #[tauri::command]
@@ -592,6 +593,7 @@ async fn update_sidebar_config(state: State<'_, AppState>, patch: SidebarConfigP
     if let Some(v) = patch.sidebar_active_tab { cfg.sidebar_active_tab = v; }
     if let Some(w) = patch.sidebar_width { cfg.sidebar_width = w.clamp(160, 600); }
     if let Some(v) = patch.show_hidden_files { cfg.show_hidden_files = v; }
+    if let Some(v) = patch.worktrees_view_mode { cfg.worktrees_view_mode = v; }
     config::save_ui_config(&cfg).map_err(|e| e.to_string())
 }
 
