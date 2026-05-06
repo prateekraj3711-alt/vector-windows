@@ -228,7 +228,7 @@ pub fn pin_worktree(
 /// Return the list of code editors that are currently installed on this
 /// machine. Results are cached in `AppState` after the first call.
 #[tauri::command]
-pub fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorInfo>, String> {
+pub async fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorInfo>, String> {
     // Fast path: return cached value
     {
         let cache = state.installed_editors.lock();
@@ -237,38 +237,45 @@ pub fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorInfo>, 
         }
     }
 
-    // Slow path: probe each editor
-    let mdfind = match config::which_path("mdfind") {
-        Some(p) => p,
-        None => {
-            // mdfind not available — return empty list gracefully
-            let mut cache = state.installed_editors.lock();
-            *cache = Some(vec![]);
-            return Ok(vec![]);
-        }
-    };
+    // Slow path: probe each editor in parallel on a blocking worker. Eight
+    // sequential `mdfind` calls would otherwise stall the main thread for
+    // hundreds of ms on first sidebar mount.
+    let found = tauri::async_runtime::spawn_blocking(|| -> Vec<EditorInfo> {
+        let Some(mdfind) = config::which_path("mdfind") else {
+            return vec![];
+        };
 
-    let mut found: Vec<EditorInfo> = Vec::new();
-    for &(bundle_id, display_name) in EDITORS {
-        let query = format!("kMDItemCFBundleIdentifier == '{}'", bundle_id);
-        let output = Command::new(&mdfind)
-            .arg(&query)
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() && !out.stdout.is_empty() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                if !stdout.trim().is_empty() {
-                    found.push(EditorInfo {
+        let handles: Vec<_> = EDITORS
+            .iter()
+            .map(|&(bundle_id, display_name)| {
+                let mdfind = mdfind.clone();
+                std::thread::spawn(move || -> Option<EditorInfo> {
+                    let query = format!("kMDItemCFBundleIdentifier == '{}'", bundle_id);
+                    let out = Command::new(&mdfind).arg(&query).output().ok()?;
+                    if !out.status.success() {
+                        return None;
+                    }
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    if stdout.trim().is_empty() {
+                        return None;
+                    }
+                    Some(EditorInfo {
                         bundle_id: bundle_id.to_string(),
                         display_name: display_name.to_string(),
-                    });
-                }
-            }
-        }
-    }
+                    })
+                })
+            })
+            .collect();
 
-    let mut cache = state.installed_editors.lock();
-    *cache = Some(found.clone());
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    *state.installed_editors.lock() = Some(found.clone());
     Ok(found)
 }
 
