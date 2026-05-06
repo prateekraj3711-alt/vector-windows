@@ -1194,7 +1194,25 @@ export default function App() {
     if (activeLeaf && isPtyLeaf(activeLeaf)) setLastFocusedPtyPaneId(activeLeaf.id);
   }, [activeLeaf]);
 
-  const [pinned, setPinned] = useState<Record<string, string[]>>({});
+  const [pinned, setPinned] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem("vector.pinnedWorktrees");
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      const out: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (Array.isArray(v) && v.every((x) => typeof x === "string")) out[k] = v;
+      }
+      return out;
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { localStorage.setItem("vector.pinnedWorktrees", JSON.stringify(pinned)); } catch {}
+    }, 200);
+    return () => clearTimeout(id);
+  }, [pinned]);
   const pinKey: string | null = lastFocusedPtyPaneId ? `pane:${lastFocusedPtyPaneId}` : null;
   const pinnedForCurrent = pinKey ? (pinned[pinKey] ?? []) : [];
   const togglePin = useCallback((path: string) => {
