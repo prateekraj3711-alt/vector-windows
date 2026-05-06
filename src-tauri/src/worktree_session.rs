@@ -12,6 +12,22 @@ pub struct WorktreeState {
 
 pub type Snapshot = HashMap<PathBuf, WorktreeState>;
 
+/// Directory names that are pure build artifacts / caches — neither file
+/// viewer nor repo discovery should descend into or watch them. Shared with
+/// `fs_watch.rs` so both filters stay in lockstep.
+pub const NOISY_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+];
+
+pub fn is_noisy_dir(name: &str) -> bool {
+    NOISY_DIRS.contains(&name)
+}
+
 /// BFS-walk `project_root` to find all git repo roots (directories containing
 /// a `.git` entry).
 ///
@@ -49,10 +65,7 @@ pub fn discover_repos(project_root: &Path) -> Vec<PathBuf> {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            if matches!(
-                name.as_str(),
-                "node_modules" | "target" | "dist" | "build" | ".next" | ".cache"
-            ) {
+            if is_noisy_dir(&name) {
                 continue;
             }
             if name.starts_with('.') && depth > 0 {

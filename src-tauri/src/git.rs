@@ -146,8 +146,20 @@ pub fn status_porcelain(worktree_path: &Path) -> Result<Vec<StatusEntry>, String
     Ok(entries)
 }
 
+/// Refuse refs that would be parsed as a git flag (anything starting with `-`).
+/// Defense-in-depth: callers should already pass refs returned by
+/// `resolve_base_ref` or `git rev-parse`, but a corrupt config or malformed
+/// caller payload must not be allowed to inject `--upload-pack=evil` etc.
+fn check_ref(r: &str) -> Result<(), String> {
+    if r.starts_with('-') || r.is_empty() {
+        return Err(format!("refusing to use ref starting with '-' or empty: {:?}", r));
+    }
+    Ok(())
+}
+
 /// `git diff <base_ref>...HEAD --name-status` + `--numstat`, merged by path
 pub fn diff_name_status(worktree_path: &Path, base_ref: &str) -> Result<Vec<DiffEntry>, String> {
+    check_ref(base_ref)?;
     let range = format!("{}...HEAD", base_ref);
 
     // First pass: numstat for additions/deletions
@@ -220,6 +232,7 @@ pub fn diff_file(
         }
         DiffBase::Ref => {
             if let Some(r) = base_ref {
+                check_ref(r)?;
                 let range = format!("{}...HEAD", r);
                 run_git(&["diff", &range, "--", file_str.as_ref()], worktree_path)?
             } else {

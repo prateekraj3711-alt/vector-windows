@@ -16,10 +16,7 @@ pub struct WatcherHandle {
 fn is_filtered(path: &Path) -> bool {
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy();
-        matches!(
-            s.as_ref(),
-            "node_modules" | "target" | "dist" | "build" | ".next" | ".cache"
-        )
+        crate::worktree_session::is_noisy_dir(s.as_ref())
     }) || path.to_string_lossy().contains("/.git/objects/")
         || path
             .file_name()
