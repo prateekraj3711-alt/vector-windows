@@ -97,7 +97,7 @@ function renderMarkdown(md: string): ReactNode[] {
   return blocks;
 }
 
-type AgentMeta = { id: string; label: string; available: boolean };
+type AgentMeta = { id: string; label: string; available: boolean; restartableOnThemeChange?: boolean };
 
 type PtyLeaf = {
   kind: "pty";
@@ -732,9 +732,31 @@ export default function App() {
   const [updateCheck, setUpdateCheck] = useState<null | "checking" | "uptodate" | "error">(null);
   const notifReady = useRef(false);
 
+  const [themeStaleByPane, setThemeStaleByPane] = useState<Record<string, boolean>>({});
+  const [themeBannerDismissed, setThemeBannerDismissed] = useState<Record<string, boolean>>({});
+  const tabsRef = useRef<Tab[]>([]);
+  const agentsRef = useRef<AgentMeta[]>([]);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+  useEffect(() => { agentsRef.current = agents; }, [agents]);
+
+  const themeInitDone = useRef(false);
   useEffect(() => {
     document.body.className = themeName === "light" ? "theme-light" : "theme-dark";
-  }, [themeName]);
+    if (!themeInitDone.current) { themeInitDone.current = true; return; }
+    const restartable = new Set(agentsRef.current.filter((a) => a.restartableOnThemeChange).map((a) => a.id));
+    const stale: Record<string, boolean> = {};
+    if (restartable.size > 0) {
+      for (const tab of tabsRef.current) {
+        for (const leaf of flattenLeaves(tab.root)) {
+          if (leaf.kind === "pty" && restartable.has(leaf.agentId)) {
+            stale[leaf.id] = true;
+          }
+        }
+      }
+    }
+    setThemeStaleByPane(stale);
+    setThemeBannerDismissed({});
+  }, [themeName, customTheme]);
   useEffect(() => { try { localStorage.setItem("vector.fontFamily", fontFamily); } catch {} }, [fontFamily]);
   useEffect(() => { try { localStorage.setItem("vector.fontSize", String(fontSize)); } catch {} }, [fontSize]);
   useEffect(() => { try { localStorage.setItem("vector.themeName", themeName); } catch {} }, [themeName]);
@@ -974,6 +996,12 @@ export default function App() {
       ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, epoch: leaf.epoch + 1 }) : leaf) }
       : t));
   }, [activeId]);
+
+  const restartPane = useCallback((tabId: string, paneId: string) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId
+      ? { ...t, root: mapLeaf(t.root, paneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, epoch: leaf.epoch + 1 }) : leaf) }
+      : t));
+  }, []);
 
   const changeActiveAgent = useCallback((agentId: string) => {
     setTabs((prev) => prev.map((t) => t.id === activeId
@@ -1591,6 +1619,13 @@ export default function App() {
                 onCancelPaneRename={() => { setRenamingPaneId(null); setPaneRenameDraft(""); }}
                 onClosePane={(pid) => closePane(t.id, pid)}
                 onOpenPreview={openPreview}
+                themeStaleByPane={themeStaleByPane}
+                themeBannerDismissed={themeBannerDismissed}
+                onRestartPane={(tabId, paneId) => {
+                  restartPane(tabId, paneId);
+                  setThemeStaleByPane((m) => { const n = { ...m }; delete n[paneId]; return n; });
+                }}
+                onDismissThemeBanner={(paneId) => setThemeBannerDismissed((m) => ({ ...m, [paneId]: true }))}
               />
             </div>
           ))}
@@ -2614,6 +2649,10 @@ type PaneViewProps = {
   onCancelPaneRename: () => void;
   onClosePane: (paneId: string) => void;
   onOpenPreview: (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
+  themeStaleByPane: Record<string, boolean>;
+  themeBannerDismissed: Record<string, boolean>;
+  onRestartPane: (tabId: string, paneId: string) => void;
+  onDismissThemeBanner: (paneId: string) => void;
 };
 
 function PaneTitleBar({
@@ -2757,7 +2796,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -2901,6 +2940,13 @@ function PaneView(props: PaneViewProps) {
               />
             )}
             <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
+              {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
+                <div className="theme-stale-banner">
+                  <span>Theme changed — restart agent to apply.</span>
+                  <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
+                  <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+                </div>
+              )}
               <TerminalView
                 key={`${leaf.id}-${leaf.epoch}`}
                 tabId={tabId}
