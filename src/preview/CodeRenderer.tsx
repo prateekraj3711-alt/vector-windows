@@ -1,4 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+// Above this size shiki tokenization stalls the main thread for seconds.
+// Render as plain <pre> instead — readable, no highlighting.
+const HIGHLIGHT_BYTE_CAP = 512 * 1024;
 
 export function CodeRenderer({
   data,
@@ -13,9 +17,15 @@ export function CodeRenderer({
 }) {
   const [html, setHtml] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const text = new TextDecoder("utf-8", { fatal: false }).decode(data);
+  const text = useMemo(() => new TextDecoder("utf-8", { fatal: false }).decode(data), [data]);
+  const tooBigToHighlight = data.byteLength > HIGHLIGHT_BYTE_CAP;
 
   useEffect(() => {
+    if (tooBigToHighlight) {
+      setHtml(null);
+      setErr(null);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -42,7 +52,7 @@ export function CodeRenderer({
     return () => {
       cancelled = true;
     };
-  }, [text, grammar, theme]);
+  }, [text, grammar, theme, tooBigToHighlight]);
 
   useEffect(() => {
     if (!html || !jumpLine) return;
@@ -66,6 +76,25 @@ export function CodeRenderer({
         Highlight error: {err}
       </pre>
     );
+  if (tooBigToHighlight) {
+    return (
+      <pre
+        style={{
+          padding: 12,
+          margin: 0,
+          fontSize: 13,
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          color: theme === "dark" ? "#c9d1d9" : "#24292f",
+          whiteSpace: "pre",
+          width: "max-content",
+          minWidth: "100%",
+          boxSizing: "border-box",
+        }}
+      >
+        {text}
+      </pre>
+    );
+  }
   if (!html)
     return <pre style={{ padding: 16, color: "#888", margin: 0 }}>Highlighting…</pre>;
 
@@ -76,8 +105,8 @@ export function CodeRenderer({
         padding: 12,
         fontSize: 13,
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        overflowX: "auto",
-        height: "100%",
+        width: "max-content",
+        minWidth: "100%",
         boxSizing: "border-box",
       }}
       dangerouslySetInnerHTML={{ __html: html }}
