@@ -16,6 +16,13 @@ pub struct ReadFileResult {
     pub mime: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct PreviewMeta {
+    pub truncated: bool,
+    pub size_bytes: u64,
+    pub mime: Option<String>,
+}
+
 fn expand_tilde(input: &str) -> PathBuf {
     if let Some(rest) = input.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
@@ -87,6 +94,40 @@ pub fn read_file_bytes(path: String, cap_bytes: u64) -> Result<ReadFileResult, S
         size_bytes,
         mime,
     })
+}
+
+/// Cheap stat-only check used by the preview pane before fetching bytes.
+/// Returns size + mime + whether the file exceeds `cap_bytes`. Async +
+/// `spawn_blocking` so the metadata syscall never stalls the main thread.
+#[tauri::command]
+pub async fn preview_meta(path: String, cap_bytes: u64) -> Result<PreviewMeta, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = expand_tilde(&path);
+        let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+        if meta.is_dir() {
+            return Err("path is a directory".to_string());
+        }
+        let size_bytes = meta.len();
+        let mime = guess_mime(&p);
+        Ok(PreviewMeta { truncated: size_bytes > cap_bytes, size_bytes, mime })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stream raw file bytes back to the frontend as binary. Tauri v2's
+/// `ipc::Response` puts the bytes on the wire as an ArrayBuffer instead of
+/// expanding them into a JSON `number[]` (which inflates ~4× and parses on
+/// the WebView main thread — the preview hang root cause).
+#[tauri::command]
+pub async fn read_file_raw(path: String) -> Result<tauri::ipc::Response, String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let p = expand_tilde(&path);
+        std::fs::read(&p).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]

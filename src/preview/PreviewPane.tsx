@@ -14,8 +14,7 @@ import { HtmlRenderer } from "./HtmlRenderer";
 import { PathContextMenu } from "./contextMenu";
 import { DiffRenderer } from "./DiffRenderer";
 
-type ReadFileResult = {
-  bytes: number[];
+type PreviewMeta = {
   truncated: boolean;
   size_bytes: number;
   mime: string | null;
@@ -57,18 +56,23 @@ export const PreviewPane = forwardRef<PreviewPaneHandle, PreviewLeafProps>(funct
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const r = await invoke<ReadFileResult>("read_file_bytes", { path: filePath, capBytes: cap });
-      if (r.truncated) {
-        setState({ status: "too-large", sizeBytes: r.size_bytes, capBytes: cap });
+      // Stat first so we can short-circuit oversize files without ever pulling
+      // their bytes across the IPC boundary.
+      const meta = await invoke<PreviewMeta>("preview_meta", { path: filePath, capBytes: cap });
+      if (meta.truncated) {
+        setState({ status: "too-large", sizeBytes: meta.size_bytes, capBytes: cap });
         return;
       }
-      const bytes = new Uint8Array(r.bytes);
+      // Tauri v2 binary IPC: backend returns `tauri::ipc::Response::new(bytes)`,
+      // frontend receives an ArrayBuffer — no JSON `number[]` inflation.
+      const buf = await invoke<ArrayBuffer>("read_file_raw", { path: filePath });
+      const bytes = new Uint8Array(buf);
       const renderer = pickRenderer(filePath);
       if (renderer.kind === "unknown-text" && isLikelyBinary(bytes)) {
         setState({ status: "binary" });
         return;
       }
-      setState({ status: "loaded", data: bytes, sizeBytes: r.size_bytes, mime: r.mime });
+      setState({ status: "loaded", data: bytes, sizeBytes: meta.size_bytes, mime: meta.mime });
     } catch (e: any) {
       setState({ status: "error", message: String(e?.message ?? e) });
     }

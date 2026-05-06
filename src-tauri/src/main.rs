@@ -646,7 +646,7 @@ fn main() {
             set_badge_count, get_claude_usage,
             list_claude_profiles, create_claude_profile, update_claude_profile,
             delete_claude_profile, resolve_claude_profile, validate_claude_home,
-            preview::path_exists, preview::read_file_bytes, preview::reveal_in_finder,
+            preview::path_exists, preview::read_file_bytes, preview::preview_meta, preview::read_file_raw, preview::reveal_in_finder,
             preview::open_default_app,
             get_ui_config, update_sidebar_config,
             sidebar::list_dir,
