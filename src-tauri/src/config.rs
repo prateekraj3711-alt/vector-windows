@@ -213,6 +213,13 @@ pub fn which(bin: &str) -> bool {
     which_path(bin).is_some()
 }
 
+/// Whether an agent caches terminal colors at startup and needs a process
+/// restart to pick up a Vector theme change. The frontend shows a banner
+/// offering a one-click restart for these agents.
+pub fn restartable_on_theme_change(agent_id: &str) -> bool {
+    matches!(agent_id, "claude")
+}
+
 // ——— Claude profiles ———
 
 fn profiles_path() -> Option<PathBuf> {

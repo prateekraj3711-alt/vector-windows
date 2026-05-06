@@ -65,8 +65,15 @@ export type EditorInfo = { bundle_id: string; display_name: string };
 export function makeWorktreeMenuItems(
   worktreePath: string,
   editors: EditorInfo[],
+  pin?: { isPinned: boolean; canPin: boolean; onTogglePin: (path: string) => void },
 ): FileMenuItem[] {
   const items: FileMenuItem[] = [];
+  if (pin && pin.canPin) {
+    items.push({
+      label: pin.isPinned ? "Unpin from this pane" : "Pin to this pane",
+      onClick: () => pin.onTogglePin(worktreePath),
+    });
+  }
   for (const ed of editors) {
     items.push({
       label: `Open in ${ed.display_name}`,

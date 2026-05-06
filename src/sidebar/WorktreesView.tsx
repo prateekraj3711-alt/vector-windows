@@ -24,12 +24,16 @@ type Props = {
   changesView: ChangesViewMode;
   onChangesView: (m: ChangesViewMode) => void;
   activePath: string | null;
+  pinnedPaths: string[];
+  pinEnabled: boolean;
+  onTogglePin: (path: string) => void;
 };
 
-export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesView, onChangesView, activePath }: Props) {
+export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesView, onChangesView, activePath, pinnedPaths, pinEnabled, onTogglePin }: Props) {
   const [groups, setGroups] = useState<RepoGroup[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
+  const [collapsedPinned, setCollapsedPinned] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editors, setEditors] = useState<EditorInfo[]>([]);
@@ -125,20 +129,29 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesVi
     return branch.includes(q) || dir.includes(q);
   };
 
+  const pinnedSet = new Set(pinnedPaths);
   const filteredGroups = groups
     .map((g) => {
-      const sortedWts = [...g.worktrees].sort((a, b) => {
-        if (a.is_main && !b.is_main) return -1;
-        if (!a.is_main && b.is_main) return 1;
-        const an = a.branch ?? basename(a.path);
-        const bn = b.branch ?? basename(b.path);
-        return an.localeCompare(bn);
-      });
+      const sortedWts = [...g.worktrees]
+        .filter((w) => !pinnedSet.has(w.path))
+        .sort((a, b) => {
+          if (a.is_main && !b.is_main) return -1;
+          if (!a.is_main && b.is_main) return 1;
+          const an = a.branch ?? basename(a.path);
+          const bn = b.branch ?? basename(b.path);
+          return an.localeCompare(bn);
+        });
       const visibleWts = q ? sortedWts.filter(matches) : sortedWts;
       return { ...g, sortedWts, visibleWts };
     })
     // Hide repo groups with no visible worktrees AND no error to surface.
     .filter((g) => g.visibleWts.length > 0 || g.error);
+
+  const allWorktreesByPath = new Map<string, WorktreeInfo>();
+  for (const g of groups) for (const w of g.worktrees) allWorktreesByPath.set(w.path, w);
+  const pinnedItems = pinnedPaths
+    .map((p) => allWorktreesByPath.get(p))
+    .filter((w): w is WorktreeInfo => !!w && matches(w));
 
   const onRowContextMenu = (e: React.MouseEvent, worktreePath: string) => {
     e.preventDefault();
@@ -152,7 +165,11 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesVi
         <FileContextMenu
           x={menu.x}
           y={menu.y}
-          items={makeWorktreeMenuItems(menu.worktreePath, editors)}
+          items={makeWorktreeMenuItems(menu.worktreePath, editors, {
+            isPinned: pinnedSet.has(menu.worktreePath),
+            canPin: pinEnabled,
+            onTogglePin,
+          })}
           onClose={() => setMenu(null)}
         />
       )}
@@ -189,7 +206,27 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesVi
           ><TreeIcon /></button>
         </div>
       </div>
-      {filteredGroups.length === 0 && q && (
+      {pinnedItems.length > 0 && (
+        <div className="wt-group wt-group-pinned">
+          <div className="wt-group-header wt-group-header-pinned">
+            <span className="wt-group-name">Pinned</span>
+            <span className="wt-group-count">{pinnedItems.length}</span>
+          </div>
+          {pinnedItems.map((w) => (
+            <WorktreeRow
+              key={`pinned-${w.path}`}
+              worktree={w}
+              isExpanded={!collapsedPinned.has(w.path)}
+              onToggle={() => toggle(collapsedPinned, setCollapsedPinned, w.path)}
+              onOpenPreview={onOpenPreview}
+              onContextMenu={(e) => onRowContextMenu(e, w.path)}
+              changesView={changesView}
+              activePath={activePath}
+            />
+          ))}
+        </div>
+      )}
+      {filteredGroups.length === 0 && pinnedItems.length === 0 && q && (
         <div className="wt-empty">No worktrees match "{query}"</div>
       )}
       {filteredGroups.map((g) => {

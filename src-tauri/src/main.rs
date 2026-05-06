@@ -27,10 +27,12 @@ struct AppState {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentMeta {
     id: String,
     label: String,
     available: bool,
+    restartable_on_theme_change: bool,
 }
 
 #[tauri::command]
@@ -42,6 +44,7 @@ async fn list_agents(state: State<'_, AppState>) -> Result<Vec<AgentMeta>, Strin
             id: id.clone(),
             label: spec.label.clone().unwrap_or_else(|| id.clone()),
             available: config::which(&bin),
+            restartable_on_theme_change: config::restartable_on_theme_change(id),
         }
     }).collect();
     out.sort_by(|a, b| a.label.cmp(&b.label));
@@ -630,6 +633,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(AppState {
             registry: Arc::new(pty::PtyRegistry::new()),
             config: parking_lot::Mutex::new(config::load()),

@@ -1,7 +1,7 @@
 {
   "name": "vector",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@iconify/react": "6.0.2",
     "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/plugin-autostart": "2.5.1",
     "@tauri-apps/plugin-dialog": "2.7.0",
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-process": "2.3.1",

@@ -4,9 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
+  onAction,
+  registerActionTypes,
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -97,7 +100,7 @@ function renderMarkdown(md: string): ReactNode[] {
   return blocks;
 }
 
-type AgentMeta = { id: string; label: string; available: boolean };
+type AgentMeta = { id: string; label: string; available: boolean; restartableOnThemeChange?: boolean };
 
 type PtyLeaf = {
   kind: "pty";
@@ -388,7 +391,14 @@ function resolveProfileForCwd(profiles: ClaudeProfileDto[], cwd: string): Claude
   return best?.profile ?? null;
 }
 
-const darkTheme: ITheme = { background: "#0b0b0f", foreground: "#e6e6e6", cursor: "#e6e6e6" };
+const darkTheme: ITheme = {
+  background: "#0b0b0f",
+  foreground: "#e6e6e6",
+  cursor: "#e6e6e6",
+  selectionBackground: "#3a5f8a",
+  selectionInactiveBackground: "#2a3f5a",
+  selectionForeground: "#ffffff",
+};
 // Solarized Light: easy on the eyes
 const lightTheme: ITheme = {
   background: "#fdf6e3",
@@ -398,6 +408,9 @@ const lightTheme: ITheme = {
   blue: "#268bd2", magenta: "#d33682", cyan: "#2aa198", white: "#eee8d5",
   brightBlack: "#002b36", brightRed: "#cb4b16", brightGreen: "#586e75", brightYellow: "#657b83",
   brightBlue: "#839496", brightMagenta: "#6c71c4", brightCyan: "#93a1a1", brightWhite: "#fdf6e3",
+  selectionBackground: "#a8c7fa",
+  selectionInactiveBackground: "#cfd8ea",
+  selectionForeground: "#1a1a1a",
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -585,6 +598,12 @@ export default function App() {
   // for the top-level ~/.claude login.
   const [usageByProfile, setUsageByProfile] = useState<Record<string, ClaudeUsage>>({});
   const [usageOpen, setUsageOpen] = useState(false);
+  const [, setUsageTick] = useState(0);
+  useEffect(() => {
+    if (!usageOpen) return;
+    const id = setInterval(() => setUsageTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, [usageOpen]);
   const leafStartedMs = useRef<Record<string, number>>({});
   const markLeafStarted = useCallback((leafId: string, epoch: number) => {
     leafStartedMs.current[`${leafId}:${epoch}`] = Date.now();
@@ -722,9 +741,37 @@ export default function App() {
   const [updateCheck, setUpdateCheck] = useState<null | "checking" | "uptodate" | "error">(null);
   const notifReady = useRef(false);
 
+  const [themeStaleByPane, setThemeStaleByPane] = useState<Record<string, boolean>>({});
+  const [themeBannerDismissed, setThemeBannerDismissed] = useState<Record<string, boolean>>({});
+  const tabsRef = useRef<Tab[]>([]);
+  const agentsRef = useRef<AgentMeta[]>([]);
+  const paneTitlesRef = useRef<Record<string, string>>({});
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+  useEffect(() => { agentsRef.current = agents; }, [agents]);
+  useEffect(() => { paneTitlesRef.current = paneTitles; }, [paneTitles]);
+
+  const pendingNotifyRef = useRef<Map<number, { tabId: string; paneId: string }>>(new Map());
+  const lastNotifyRef = useRef<{ tabId: string; paneId: string } | null>(null);
+  const nextNotifyIdRef = useRef<number>(1);
+
+  const themeInitDone = useRef(false);
   useEffect(() => {
     document.body.className = themeName === "light" ? "theme-light" : "theme-dark";
-  }, [themeName]);
+    if (!themeInitDone.current) { themeInitDone.current = true; return; }
+    const restartable = new Set(agentsRef.current.filter((a) => a.restartableOnThemeChange).map((a) => a.id));
+    const stale: Record<string, boolean> = {};
+    if (restartable.size > 0) {
+      for (const tab of tabsRef.current) {
+        for (const leaf of flattenLeaves(tab.root)) {
+          if (leaf.kind === "pty" && restartable.has(leaf.agentId)) {
+            stale[leaf.id] = true;
+          }
+        }
+      }
+    }
+    setThemeStaleByPane(stale);
+    setThemeBannerDismissed({});
+  }, [themeName, customTheme]);
   useEffect(() => { try { localStorage.setItem("vector.fontFamily", fontFamily); } catch {} }, [fontFamily]);
   useEffect(() => { try { localStorage.setItem("vector.fontSize", String(fontSize)); } catch {} }, [fontSize]);
   useEffect(() => { try { localStorage.setItem("vector.themeName", themeName); } catch {} }, [themeName]);
@@ -748,6 +795,9 @@ export default function App() {
       setDefaultAgent(defAvailable ? def : (firstInstalled ?? "__shell__"));
       setRecents(loadRecents());
       notifReady.current = await ensureNotifPermission();
+      if (notifReady.current) {
+        try { await registerActionTypes([{ id: "vector-pane", actions: [] }]); } catch {}
+      }
       // Background update check — don't block startup.
       checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
       // Restore previously-open tabs. If a user explicitly picked a session,
@@ -776,6 +826,42 @@ export default function App() {
       tabsLoaded.current = true;
     })();
   }, []);
+
+  const focusTabAndPane = useCallback(async (tabId: string, paneId: string) => {
+    try {
+      const win = getCurrentWindow();
+      await win.show();
+      await win.setFocus();
+    } catch {}
+    setBellTabs((b) => { if (!b.has(tabId)) return b; const n = new Set(b); n.delete(tabId); return n; });
+    const tabExists = tabsRef.current.some((t) => t.id === tabId);
+    if (!tabExists) return;
+    setActiveId(tabId);
+    setTabs((prev) => prev.map((t) => {
+      if (t.id !== tabId) return t;
+      const leaf = findLeaf(t.root, paneId);
+      return leaf ? { ...t, activePaneId: paneId } : t;
+    }));
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const handle = await onAction((notif) => {
+          const id = typeof notif?.id === "number" ? notif.id : null;
+          const fromMap = id != null ? pendingNotifyRef.current.get(id) : undefined;
+          const target = fromMap ?? lastNotifyRef.current;
+          if (id != null) pendingNotifyRef.current.delete(id);
+          if (!target) { void getCurrentWindow().show().catch(() => {}); return; }
+          focusTabAndPane(target.tabId, target.paneId);
+        });
+        if (cancelled) handle.unregister(); else unlisten = () => handle.unregister();
+      } catch {}
+    })();
+    return () => { cancelled = true; unlisten?.(); };
+  }, [focusTabAndPane]);
 
   const pushRecent = useCallback((path: string) => {
     setRecents((prev) => {
@@ -965,6 +1051,12 @@ export default function App() {
       : t));
   }, [activeId]);
 
+  const restartPane = useCallback((tabId: string, paneId: string) => {
+    setTabs((prev) => prev.map((t) => t.id === tabId
+      ? { ...t, root: mapLeaf(t.root, paneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, epoch: leaf.epoch + 1 }) : leaf) }
+      : t));
+  }, []);
+
   const changeActiveAgent = useCallback((agentId: string) => {
     setTabs((prev) => prev.map((t) => t.id === activeId
       ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 }) : leaf) }
@@ -1004,16 +1096,27 @@ export default function App() {
     const isActive = tabId === activeId;
     if (!windowFocused || !isActive) {
       setBellTabs((b) => { const n = new Set(b); n.add(tabId); return n; });
-      const tab = tabs.find((t) => t.id === tabId);
+      const tab = tabsRef.current.find((t) => t.id === tabId);
       const leaf = tab ? findLeaf(tab.root, paneId) : null;
       const ptyAgentId = leaf && isPtyLeaf(leaf) ? leaf.agentId : undefined;
-      const agent = agents.find((a) => a.id === ptyAgentId);
-      const label = agent?.label ?? ptyAgentId ?? "Agent";
+      const agent = agentsRef.current.find((a) => a.id === ptyAgentId);
+      const agentName = agent?.label ?? ptyAgentId ?? "Agent";
       if (notifReady.current) {
-        try { sendNotification({ title: "Vector", body: `${label} needs input` }); } catch {}
+        try {
+          const cwd = leaf && isPtyLeaf(leaf) ? (leaf.cwd ?? "") : "";
+          const wt = cwd ? (cwd.split("/").filter(Boolean).pop() ?? cwd) : "";
+          const paneTitle = paneTitlesRef.current[paneId] ?? "";
+          const body = [wt, paneTitle].filter(Boolean).join(" · ") || "needs input";
+          // 32-bit positive id space; wrap to avoid overflow over a long session.
+          const nid = nextNotifyIdRef.current;
+          nextNotifyIdRef.current = (nid % 0x7fffffff) + 1;
+          pendingNotifyRef.current.set(nid, { tabId, paneId });
+          lastNotifyRef.current = { tabId, paneId };
+          sendNotification({ id: nid, actionTypeId: "vector-pane", title: `${agentName} needs attention`, body });
+        } catch {}
       }
     }
-  }, [activeId, tabs, agents]);
+  }, [activeId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1085,6 +1188,42 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId);
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
+
+  const [lastFocusedPtyPaneId, setLastFocusedPtyPaneId] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeLeaf && isPtyLeaf(activeLeaf)) setLastFocusedPtyPaneId(activeLeaf.id);
+  }, [activeLeaf]);
+
+  const [pinned, setPinned] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = localStorage.getItem("vector.pinnedWorktrees");
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      const out: Record<string, string[]> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (Array.isArray(v) && v.every((x) => typeof x === "string")) out[k] = v;
+      }
+      return out;
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { localStorage.setItem("vector.pinnedWorktrees", JSON.stringify(pinned)); } catch {}
+    }, 200);
+    return () => clearTimeout(id);
+  }, [pinned]);
+  const pinKey: string | null = lastFocusedPtyPaneId ? `pane:${lastFocusedPtyPaneId}` : null;
+  const pinnedForCurrent = pinKey ? (pinned[pinKey] ?? []) : [];
+  const togglePin = useCallback((path: string) => {
+    if (!pinKey) return;
+    setPinned((p) => {
+      const cur = p[pinKey] ?? [];
+      const next = cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path];
+      return { ...p, [pinKey]: next };
+    });
+  }, [pinKey]);
+
   const xtermTheme: ITheme = useMemo(() => {
     if (themeName === "custom" && customTheme) return customTheme;
     return themeName === "light" ? lightTheme : darkTheme;
@@ -1158,6 +1297,19 @@ export default function App() {
     if (sameDay) return hm;
     const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     return `${md} ${hm}`;
+  };
+  const formatExpiryRelative = (iso?: string | null): { rel: string; abs: string } | null => {
+    if (!iso) return null;
+    const ms = new Date(iso).getTime();
+    if (isNaN(ms)) return null;
+    const abs = new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const diff = ms - Date.now();
+    if (diff <= 0) return { rel: "reset", abs };
+    const totalMin = Math.floor(diff / 60_000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    const rel = h > 0 ? `${h}h ${m}m` : totalMin >= 1 ? `${m}m` : "<1m";
+    return { rel: `resets in ${rel}`, abs };
   };
   const ctxResetText = formatResetTime(fiveHour?.resetsAt);
 
@@ -1407,6 +1559,9 @@ export default function App() {
         }
         onOpenPreview={openPreview}
         activePreviewPath={activeLeaf && !isPtyLeaf(activeLeaf) ? activeLeaf.filePath : null}
+        pinnedPaths={pinnedForCurrent}
+        pinEnabled={pinKey != null}
+        onTogglePin={togglePin}
       />
       {update && (
         <div className="update-banner">
@@ -1490,7 +1645,11 @@ export default function App() {
                       <div className="usage-fill" style={{ width: `${Math.min(100, Math.max(0, bucket.utilization))}%` }} />
                     </div>
                     <div className="usage-row-reset">
-                      {bucket.resetsAt ? `Resets ${formatResetTime(bucket.resetsAt)}` : "No reset scheduled"}
+                      {(() => {
+                        const expiry = formatExpiryRelative(bucket.resetsAt);
+                        if (!expiry) return "No reset scheduled";
+                        return <>{expiry.rel} · {expiry.abs}</>;
+                      })()}
                     </div>
                   </div>
                 ) : null
@@ -1581,6 +1740,13 @@ export default function App() {
                 onCancelPaneRename={() => { setRenamingPaneId(null); setPaneRenameDraft(""); }}
                 onClosePane={(pid) => closePane(t.id, pid)}
                 onOpenPreview={openPreview}
+                themeStaleByPane={themeStaleByPane}
+                themeBannerDismissed={themeBannerDismissed}
+                onRestartPane={(tabId, paneId) => {
+                  restartPane(tabId, paneId);
+                  setThemeStaleByPane((m) => { const n = { ...m }; delete n[paneId]; return n; });
+                }}
+                onDismissThemeBanner={(paneId) => setThemeBannerDismissed((m) => ({ ...m, [paneId]: true }))}
               />
             </div>
           ))}
@@ -2052,6 +2218,8 @@ function SettingsModal({
                     <button className={orientation === "vertical" ? "on" : ""} onClick={() => onOrientation("vertical")}>Side</button>
                   </div>
                 </div>
+                <AutostartRow />
+
                 <div className="settings-row">
                   <span>Font family</span>
                   <input
@@ -2126,6 +2294,46 @@ function SettingsModal({
             {section === "profiles" && <ProfilesSection profiles={profiles} onChanged={onProfilesChanged} />}
           </section>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AutostartRow() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { isEnabled } = await import("@tauri-apps/plugin-autostart");
+        const v = await isEnabled();
+        if (!cancelled) setEnabled(v);
+      } catch { if (!cancelled) setEnabled(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const toggle = async (next: boolean) => {
+    try {
+      const { enable, disable } = await import("@tauri-apps/plugin-autostart");
+      if (next) await enable(); else await disable();
+      setEnabled(next);
+    } catch {}
+  };
+  const loading = enabled === null;
+  return (
+    <div className="settings-row">
+      <span>Open at login</span>
+      <div className="seg">
+        <button
+          className={enabled === true ? "on" : ""}
+          disabled={loading}
+          onClick={() => { if (enabled !== true) void toggle(true); }}
+        >Yes</button>
+        <button
+          className={enabled === false ? "on" : ""}
+          disabled={loading}
+          onClick={() => { if (enabled !== false) void toggle(false); }}
+        >No</button>
       </div>
     </div>
   );
@@ -2604,6 +2812,10 @@ type PaneViewProps = {
   onCancelPaneRename: () => void;
   onClosePane: (paneId: string) => void;
   onOpenPreview: (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
+  themeStaleByPane: Record<string, boolean>;
+  themeBannerDismissed: Record<string, boolean>;
+  onRestartPane: (tabId: string, paneId: string) => void;
+  onDismissThemeBanner: (paneId: string) => void;
 };
 
 function PaneTitleBar({
@@ -2747,7 +2959,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -2891,6 +3103,13 @@ function PaneView(props: PaneViewProps) {
               />
             )}
             <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
+              {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
+                <div className="theme-stale-banner">
+                  <span>Theme changed — restart agent to apply.</span>
+                  <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
+                  <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+                </div>
+              )}
               <TerminalView
                 key={`${leaf.id}-${leaf.epoch}`}
                 tabId={tabId}
