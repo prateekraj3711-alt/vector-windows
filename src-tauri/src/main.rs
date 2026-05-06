@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod fs_watch;
+mod git;
 mod preview;
 mod pty;
 mod sessions;
 mod usage;
+mod sidebar;
+mod worktree_session;
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -15,6 +19,11 @@ struct AppState {
     registry: Arc<pty::PtyRegistry>,
     config: parking_lot::Mutex<config::Config>,
     profiles: parking_lot::Mutex<config::ProfilesFile>,
+    ui_config: parking_lot::Mutex<config::UiConfig>,
+    watchers: parking_lot::Mutex<std::collections::HashMap<String, fs_watch::WatcherHandle>>,
+    session_snapshots: parking_lot::Mutex<std::collections::HashMap<String, worktree_session::Snapshot>>,
+    session_manual_pins: parking_lot::Mutex<std::collections::HashMap<String, std::collections::HashSet<std::path::PathBuf>>>,
+    installed_editors: parking_lot::Mutex<Option<Vec<sidebar::EditorInfo>>>,
 }
 
 #[derive(Serialize)]
@@ -166,9 +175,44 @@ async fn start_session(
         }
     }
 
+    let watch_root = cwd.clone();
     state.registry
-        .spawn(app, session_id, &resolved, &env, cwd, cols, rows, agent_id == "claude")
-        .map_err(|e| e.to_string())
+        .spawn(app.clone(), session_id.clone(), &resolved, &env, cwd, cols, rows, agent_id == "claude")
+        .map_err(|e| e.to_string())?;
+
+    if let Some(root) = watch_root {
+        // Manual pins set is empty at spawn — cheap, init synchronously.
+        state.session_manual_pins.lock().insert(session_id.clone(), Default::default());
+
+        // Worktree discovery + HEAD/dirty snapshot can take seconds on large
+        // multi-repo projects (SpringVerify, etc.). Running this synchronously
+        // would block start_session and delay the agent spawn. Run it on a
+        // background thread; the agent starts immediately.
+        //
+        // Until the snapshot is inserted, `session_snapshots` has no entry for
+        // this session — `list_linked_worktrees` treats that as "pending" and
+        // returns empty (everything renders as unlinked, which is harmless).
+        let app_for_snapshot = app.clone();
+        let session_id_for_snapshot = session_id.clone();
+        let root_for_snapshot = root.clone();
+        std::thread::spawn(move || {
+            let worktrees = worktree_session::discover_worktrees(&root_for_snapshot);
+            let snapshot = worktree_session::take_snapshot(&worktrees);
+            // Session may have been killed mid-discovery; only insert if the
+            // session is still alive (manual_pins is the liveness sentinel).
+            let st = app_for_snapshot.state::<AppState>();
+            if st.session_manual_pins.lock().contains_key(&session_id_for_snapshot) {
+                st.session_snapshots.lock().insert(session_id_for_snapshot, snapshot);
+            }
+        });
+
+        match fs_watch::start_watcher(session_id.clone(), root.clone(), app) {
+            Ok(handle) => { state.watchers.lock().insert(session_id.clone(), handle); }
+            Err(e) => eprintln!("Failed to start fs watcher for {session_id}: {e}"),
+        }
+    }
+
+    Ok(())
 }
 
 // ——— Claude profile commands ———
@@ -455,6 +499,9 @@ async fn resize_pty(state: State<'_, AppState>, session_id: String, cols: u16, r
 
 #[tauri::command]
 async fn kill_session(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    state.watchers.lock().remove(&session_id);
+    state.session_snapshots.lock().remove(&session_id);
+    state.session_manual_pins.lock().remove(&session_id);
     state.registry.kill(&session_id).map_err(|e| e.to_string())
 }
 
@@ -522,6 +569,34 @@ async fn set_badge_count(app: AppHandle, count: u32) -> Result<(), String> {
     Ok(())
 }
 
+// ——— Sidebar / UI config commands ———
+
+#[tauri::command]
+async fn get_ui_config(state: State<'_, AppState>) -> Result<config::UiConfig, String> {
+    Ok(state.ui_config.lock().clone())
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct SidebarConfigPatch {
+    sidebar_collapsed: Option<bool>,
+    sidebar_active_tab: Option<config::SidebarTab>,
+    sidebar_width: Option<u32>,
+    show_hidden_files: Option<bool>,
+    worktrees_view_mode: Option<config::WorktreesViewMode>,
+}
+
+#[tauri::command]
+async fn update_sidebar_config(state: State<'_, AppState>, patch: SidebarConfigPatch) -> Result<(), String> {
+    let mut cfg = state.ui_config.lock();
+    if let Some(v) = patch.sidebar_collapsed { cfg.sidebar_collapsed = v; }
+    if let Some(v) = patch.sidebar_active_tab { cfg.sidebar_active_tab = v; }
+    if let Some(w) = patch.sidebar_width { cfg.sidebar_width = w.clamp(160, 600); }
+    if let Some(v) = patch.show_hidden_files { cfg.show_hidden_files = v; }
+    if let Some(v) = patch.worktrees_view_mode { cfg.worktrees_view_mode = v; }
+    config::save_ui_config(&cfg).map_err(|e| e.to_string())
+}
+
 /// Open a URL, file, or folder with the OS default handler. Expands a
 /// leading `~/` or bare `~` against `$HOME` first so paths lifted out of
 /// shell output work without manual expansion.
@@ -559,6 +634,11 @@ fn main() {
             registry: Arc::new(pty::PtyRegistry::new()),
             config: parking_lot::Mutex::new(config::load()),
             profiles: parking_lot::Mutex::new(config::load_profiles()),
+            ui_config: parking_lot::Mutex::new(config::load_ui_config()),
+            watchers: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            session_snapshots: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            session_manual_pins: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            installed_editors: parking_lot::Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
@@ -566,8 +646,18 @@ fn main() {
             set_badge_count, get_claude_usage,
             list_claude_profiles, create_claude_profile, update_claude_profile,
             delete_claude_profile, resolve_claude_profile, validate_claude_home,
-            preview::path_exists, preview::read_file_bytes, preview::reveal_in_finder,
-            preview::open_default_app
+            preview::path_exists, preview::read_file_bytes, preview::preview_meta, preview::read_file_raw, preview::reveal_in_finder,
+            preview::open_default_app,
+            get_ui_config, update_sidebar_config,
+            sidebar::list_dir,
+            sidebar::list_repos_in_project,
+            sidebar::list_worktrees_for_repo,
+            sidebar::list_linked_worktrees,
+            sidebar::worktree_changes,
+            sidebar::worktree_diff,
+            sidebar::pin_worktree,
+            sidebar::installed_editors,
+            sidebar::open_in_editor,
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");

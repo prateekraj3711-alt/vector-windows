@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { capForExtension, extOf, pickRenderer } from "./extensions";
 import { isLikelyBinary } from "./sniff";
@@ -12,9 +12,9 @@ import { MermaidRenderer } from "./MermaidRenderer";
 import { PdfRenderer } from "./PdfRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { PathContextMenu } from "./contextMenu";
+import { DiffRenderer } from "./DiffRenderer";
 
-type ReadFileResult = {
-  bytes: number[];
+type PreviewMeta = {
   truncated: boolean;
   size_bytes: number;
   mime: string | null;
@@ -27,36 +27,52 @@ type LoadState =
   | { status: "binary" }
   | { status: "error"; message: string };
 
+export type PreviewPaneHandle = {
+  openActions: (rect: DOMRect) => void;
+};
+
 export type PreviewLeafProps = {
   filePath: string;
   jumpLine?: number;
   jumpCol?: number;
   theme: "dark" | "light";
+  hideInlineActions?: boolean;
+  mode?: "file" | "diff";
+  baseRef?: string;
 };
 
-export function PreviewPane(props: PreviewLeafProps) {
-  const { filePath, jumpLine, jumpCol, theme } = props;
+export const PreviewPane = forwardRef<PreviewPaneHandle, PreviewLeafProps>(function PreviewPane(props, ref) {
+  const { filePath, jumpLine, jumpCol, theme, hideInlineActions, mode, baseRef } = props;
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const cap = capForExtension(extOf(filePath));
 
+  useImperativeHandle(ref, () => ({
+    openActions: (rect: DOMRect) => setMenu({ x: rect.right, y: rect.bottom }),
+  }), []);
+
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const r = await invoke<ReadFileResult>("read_file_bytes", { path: filePath, capBytes: cap });
-      if (r.truncated) {
-        setState({ status: "too-large", sizeBytes: r.size_bytes, capBytes: cap });
+      // Stat first so we can short-circuit oversize files without ever pulling
+      // their bytes across the IPC boundary.
+      const meta = await invoke<PreviewMeta>("preview_meta", { path: filePath, capBytes: cap });
+      if (meta.truncated) {
+        setState({ status: "too-large", sizeBytes: meta.size_bytes, capBytes: cap });
         return;
       }
-      const bytes = new Uint8Array(r.bytes);
+      // Tauri v2 binary IPC: backend returns `tauri::ipc::Response::new(bytes)`,
+      // frontend receives an ArrayBuffer — no JSON `number[]` inflation.
+      const buf = await invoke<ArrayBuffer>("read_file_raw", { path: filePath });
+      const bytes = new Uint8Array(buf);
       const renderer = pickRenderer(filePath);
       if (renderer.kind === "unknown-text" && isLikelyBinary(bytes)) {
         setState({ status: "binary" });
         return;
       }
-      setState({ status: "loaded", data: bytes, sizeBytes: r.size_bytes, mime: r.mime });
+      setState({ status: "loaded", data: bytes, sizeBytes: meta.size_bytes, mime: meta.mime });
     } catch (e: any) {
       setState({ status: "error", message: String(e?.message ?? e) });
     }
@@ -65,6 +81,61 @@ export function PreviewPane(props: PreviewLeafProps) {
   useEffect(() => {
     void load();
   }, [load, reloadKey]);
+
+  if (mode === "diff") {
+    return (
+      <div
+        style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", background: theme === "dark" ? "#1e1e1e" : "#fff", position: "relative" }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        {!hideInlineActions && (
+          <button
+            type="button"
+            title="Actions"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setMenu({ x: r.right, y: r.bottom });
+            }}
+            style={{
+              position: "absolute",
+              top: 6,
+              right: 8,
+              zIndex: 5,
+              background: "transparent",
+              color: theme === "dark" ? "#888" : "#666",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: 1,
+              padding: "2px 6px",
+              borderRadius: 3,
+            }}
+            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
+            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+          >
+            ⋯
+          </button>
+        )}
+        <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
+          <DiffRenderer filePath={filePath} baseRef={baseRef} theme={theme} />
+        </div>
+        {menu && (
+          <PathContextMenu
+            target={{ absPath: filePath }}
+            x={menu.x}
+            y={menu.y}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -75,34 +146,36 @@ export function PreviewPane(props: PreviewLeafProps) {
         setMenu({ x: e.clientX, y: e.clientY });
       }}
     >
-      <button
-        type="button"
-        title="Actions"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          setMenu({ x: r.right, y: r.bottom });
-        }}
-        style={{
-          position: "absolute",
-          top: 6,
-          right: 8,
-          zIndex: 5,
-          background: "transparent",
-          color: theme === "dark" ? "#888" : "#666",
-          border: "none",
-          cursor: "pointer",
-          fontSize: 16,
-          lineHeight: 1,
-          padding: "2px 6px",
-          borderRadius: 3,
-        }}
-        onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
-        onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
-      >
-        ⋯
-      </button>
+      {!hideInlineActions && (
+        <button
+          type="button"
+          title="Actions"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMenu({ x: r.right, y: r.bottom });
+          }}
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 8,
+            zIndex: 5,
+            background: "transparent",
+            color: theme === "dark" ? "#888" : "#666",
+            border: "none",
+            cursor: "pointer",
+            fontSize: 16,
+            lineHeight: 1,
+            padding: "2px 6px",
+            borderRadius: 3,
+          }}
+          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = theme === "dark" ? "#2a2a2a" : "#eee")}
+          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
+        >
+          ⋯
+        </button>
+      )}
       <div style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
         {state.status === "loading" && (
           <div style={{ padding: 16, color: "#888" }}>Loading…</div>
@@ -137,7 +210,7 @@ export function PreviewPane(props: PreviewLeafProps) {
       )}
     </div>
   );
-}
+});
 
 function RendererSwitch(props: {
   filePath: string;

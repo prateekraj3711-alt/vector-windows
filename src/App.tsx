@@ -17,8 +17,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
-import { PreviewPane } from "./preview/PreviewPane";
+import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
+import { Sidebar } from "./sidebar/Sidebar";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -117,10 +118,13 @@ type PreviewLeaf = {
   kind: "preview";
   id: string;
   cwd: string;
+  sessionId?: string; // id of the source PTY this preview was opened from (for fs-changed-{sessionId})
   filePath: string;
   jumpLine?: number;
   jumpCol?: number;
   isPreviewSlot: boolean;
+  mode?: "file" | "diff"; // default "file"; when "diff", PreviewPane renders a diff
+  baseRef?: string;        // only meaningful when mode === "diff"; e.g., "origin/main"
 };
 
 type PaneLeaf = PtyLeaf | PreviewLeaf;
@@ -231,6 +235,23 @@ function findPreviewSlot(node: PaneNode): PreviewLeaf | null {
   if (node.kind === "pty") return null;
   if (node.kind === "preview") return node.isPreviewSlot ? node : null;
   return findPreviewSlot(node.children[0]) ?? findPreviewSlot(node.children[1]);
+}
+function findPreviewByFile(
+  node: PaneNode,
+  filePath: string,
+  mode: "file" | "diff",
+  baseRef: string | undefined,
+): PreviewLeaf | null {
+  if (node.kind === "pty") return null;
+  if (node.kind === "preview") {
+    const leafMode = node.mode ?? "file";
+    if (node.filePath === filePath && leafMode === mode && (node.baseRef ?? undefined) === baseRef) {
+      return node;
+    }
+    return null;
+  }
+  return findPreviewByFile(node.children[0], filePath, mode, baseRef)
+    ?? findPreviewByFile(node.children[1], filePath, mode, baseRef);
 }
 function getCwdForLeaf(node: PaneNode, leafId: string): string | null {
   if (node.kind !== "split") return node.id === leafId ? node.cwd : null;
@@ -863,31 +884,48 @@ export default function App() {
   }, [defaultAgent]);
 
   const openPreview = useCallback(
-    (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => {
+    (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => {
       setTabs((prev) =>
         prev.map((tab) => {
           if (tab.id !== activeIdRef.current) return tab;
 
-          if (!opts.pin) {
+          // Resolve the source PTY context (cwd + sessionId) from the currently focused leaf,
+          // falling back to the leaf's own embedded values when the focus is already a preview.
+          const focused = findLeaf(tab.root, tab.activePaneId);
+          const sourceSessionId = focused
+            ? (isPtyLeaf(focused) ? focused.id : focused.sessionId)
+            : undefined;
+          const sourceCwd = focused?.cwd ?? "/";
+
+          if (opts.pin) {
+            // Duplicate guard: if any preview leaf already shows this exact file+mode+baseRef,
+            // just focus it instead of creating another pinned copy.
+            const existing = findPreviewByFile(tab.root, absPath, opts.mode ?? "file", opts.baseRef);
+            if (existing) {
+              return { ...tab, activePaneId: existing.id };
+            }
+          } else {
             const slot = findPreviewSlot(tab.root);
             if (slot) {
               const updatedRoot = mapLeaf(tab.root, slot.id, (leaf) => {
                 if (leaf.kind !== "preview") return leaf;
-                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col };
+                return { ...leaf, filePath: absPath, jumpLine: line, jumpCol: col, cwd: sourceCwd, sessionId: sourceSessionId, mode: opts.mode, baseRef: opts.baseRef };
               });
               return { ...tab, root: updatedRoot, activePaneId: slot.id };
             }
           }
 
-          const cwd = getCwdForLeaf(tab.root, tab.activePaneId) ?? "/";
           const newLeaf: PreviewLeaf = {
             kind: "preview",
             id: crypto.randomUUID(),
-            cwd,
+            cwd: sourceCwd,
+            sessionId: sourceSessionId,
             filePath: absPath,
             jumpLine: line,
             jumpCol: col,
             isPreviewSlot: !opts.pin,
+            mode: opts.mode,
+            baseRef: opts.baseRef,
           };
           const { root, newLeafId } = splitLeafWithLeaf(tab.root, tab.activePaneId, "row", newLeaf);
           return { ...tab, root, activePaneId: newLeafId };
@@ -1359,6 +1397,17 @@ export default function App() {
 
   return (
     <>
+      <Sidebar
+        onOpenSettings={() => { setSettingsSection("appearance"); setSettingsOpen(true); }}
+        projectRoot={activeLeaf?.cwd ?? null}
+        sessionId={
+          activeLeaf
+            ? (isPtyLeaf(activeLeaf) ? activeLeaf.id : (activeLeaf.sessionId ?? null))
+            : null
+        }
+        onOpenPreview={openPreview}
+        activePreviewPath={activeLeaf && !isPtyLeaf(activeLeaf) ? activeLeaf.filePath : null}
+      />
       {update && (
         <div className="update-banner">
           <div className="update-row">
@@ -1458,7 +1507,7 @@ export default function App() {
           {updateCheck === "error" && "Update check failed. Try again later."}
         </div>
       )}
-      <div className="topbar">
+      <div className="topbar" style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
         {activeTab && activeLeaf ? (
           <button className="project-btn" onClick={() => openPickerForTab(activeTab.id)} title={activeLeaf.cwd}>
             <VectorMark size={14} /> {basename(activeLeaf.cwd)}
@@ -1488,14 +1537,9 @@ export default function App() {
             {ctxResetText && <span className="ctx-reset">· resets {ctxResetText}</span>}
           </button>
         )}
-        <div className="settings">
-          <button className="icon-btn" onClick={() => { setSettingsSection("appearance"); setSettingsOpen(true); }} title="Settings (⌘,)" aria-label="Settings">
-            <GearIcon />
-          </button>
-        </div>
       </div>
       {fiveHour && ctxPct >= 60 && (
-        <div className={`ctx-banner${ctxLevel === "crit" ? " crit" : ""}`}>
+        <div className={`ctx-banner${ctxLevel === "crit" ? " crit" : ""}`} style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
           <span>
             {ctxLevel === "crit"
               ? `5h session limit nearly full (${ctxPct}% used)${ctxResetText ? ` — resets ${ctxResetText}` : ""}.`
@@ -1503,7 +1547,7 @@ export default function App() {
           </span>
         </div>
       )}
-      <div className={`shell ${orientation}`}>
+      <div className={`shell ${orientation}`} style={{ marginLeft: "var(--sidebar-offset, 0px)" }}>
         {tabs.length > 0 && tabBar}
         <div className="terms">
           {tabs.map((t) => (
@@ -1684,15 +1728,6 @@ function Shortcut({ keys, label }: { keys: string[]; label: string }) {
       </span>
       <span className="shortcut-label">{label}</span>
     </div>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.2l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
   );
 }
 
@@ -2646,6 +2681,7 @@ function PreviewPaneTitleBar({
   onClose,
   onDragStart,
   onDragEnd,
+  onActionsClick,
 }: {
   filePath: string;
   jumpLine?: number;
@@ -2654,6 +2690,7 @@ function PreviewPaneTitleBar({
   onClose: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onActionsClick?: (e: React.MouseEvent<HTMLElement>) => void;
 }) {
   const fileName = filePath.split("/").pop() || filePath;
   const suffix = jumpLine ? `:${jumpLine}${jumpCol ? `:${jumpCol}` : ""}` : "";
@@ -2668,6 +2705,14 @@ function PreviewPaneTitleBar({
     >
       <span className="pane-grip-dots">⋮⋮</span>
       <span className="pane-title-label">{fileName}{suffix}</span>
+      {onActionsClick && (
+        <span
+          className="pane-actions"
+          onClick={(e) => { e.stopPropagation(); onActionsClick(e); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          title="Actions"
+        >⋯</span>
+      )}
       {showClose && (
         <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
       )}
@@ -2708,6 +2753,7 @@ function PaneView(props: PaneViewProps) {
   const dividers = computeDividers(root, [0, 0, 1, 1]);
   const rectFor = (id: string) => rects.find((r) => r.id === id)!.rect;
   const single = leaves.length === 1;
+  const previewRefs = useRef<Map<string, PreviewPaneHandle>>(new Map());
 
   return (
     <div className="tab-panes-layout">
@@ -2767,14 +2813,25 @@ function PaneView(props: PaneViewProps) {
                     onPaneDragStart(leaf.id);
                   }}
                   onDragEnd={() => onPaneDragEnd()}
+                  onActionsClick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    previewRefs.current.get(leaf.id)?.openActions(r);
+                  }}
                 />
               )}
               <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
                 <PreviewPane
+                  ref={(handle) => {
+                    if (handle) previewRefs.current.set(leaf.id, handle);
+                    else previewRefs.current.delete(leaf.id);
+                  }}
                   filePath={leaf.filePath}
                   jumpLine={leaf.jumpLine}
                   jumpCol={leaf.jumpCol}
                   theme={themeKind}
+                  hideInlineActions={!single}
+                  mode={leaf.mode}
+                  baseRef={leaf.baseRef}
                 />
               </div>
             </div>

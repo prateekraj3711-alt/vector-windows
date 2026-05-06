@@ -23,3 +23,22 @@
 .md-preview img { max-width: 100%; }
 .md-preview table { border-collapse: collapse; }
 .md-preview th, .md-preview td { border: 1px solid #333; padding: 4px 8px; }
+
+.diff-renderer {
+  width: max-content;
+  min-width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.diff-line {
+  white-space: pre;
+  padding: 0 12px;
+  line-height: 1.5;
+}
+.diff-line.diff-add { background: rgba(46, 160, 67, 0.15); }
+.diff-line.diff-del { background: rgba(248, 81, 73, 0.15); }
+.diff-line.diff-hunk { color: #888; background: rgba(128, 128, 128, 0.08); }
+.diff-line.diff-meta { color: #888; }
+.diff-gutter { display: inline-block; width: 1.2em; user-select: none; opacity: 0.6; }
+.diff-content { white-space: pre; }

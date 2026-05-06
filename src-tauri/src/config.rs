@@ -42,6 +42,85 @@ fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("vector").join("config.toml"))
 }
 
+// ——— UI / sidebar config ———
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarTab {
+    Files,
+    Worktrees,
+}
+
+impl Default for SidebarTab {
+    fn default() -> Self { SidebarTab::Files }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreesViewMode {
+    Flat,
+    Tree,
+}
+
+impl Default for WorktreesViewMode {
+    fn default() -> Self { WorktreesViewMode::Flat }
+}
+
+fn default_sidebar_width() -> u32 { 240 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
+    #[serde(default)]
+    pub sidebar_active_tab: SidebarTab,
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
+    #[serde(default)]
+    pub show_hidden_files: bool,
+    #[serde(default)]
+    pub worktrees_view_mode: WorktreesViewMode,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        UiConfig {
+            sidebar_collapsed: false,
+            sidebar_active_tab: SidebarTab::default(),
+            sidebar_width: default_sidebar_width(),
+            show_hidden_files: false,
+            worktrees_view_mode: WorktreesViewMode::default(),
+        }
+    }
+}
+
+fn ui_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("vector").join("ui.toml"))
+}
+
+pub fn load_ui_config() -> UiConfig {
+    let Some(p) = ui_config_path() else { return UiConfig::default() };
+    let Ok(text) = std::fs::read_to_string(&p) else { return UiConfig::default() };
+    let mut cfg: UiConfig = toml::from_str(&text).unwrap_or_default();
+    cfg.sidebar_width = cfg.sidebar_width.clamp(160, 600);
+    cfg
+}
+
+pub fn save_ui_config(cfg: &UiConfig) -> std::io::Result<()> {
+    let Some(p) = ui_config_path() else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no config dir"));
+    };
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = toml::to_string_pretty(cfg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let tmp = p.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &p)?;
+    Ok(())
+}
+
 pub fn load() -> Config {
     let mut cfg = builtin();
     if let Some(p) = config_path() {

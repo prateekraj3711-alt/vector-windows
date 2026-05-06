@@ -1,0 +1,151 @@
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use serde::Serialize;
+
+use crate::git;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorktreeState {
+    pub head: String,
+    pub dirty: bool,
+}
+
+pub type Snapshot = HashMap<PathBuf, WorktreeState>;
+
+/// Directory names that are pure build artifacts / caches — neither file
+/// viewer nor repo discovery should descend into or watch them. Shared with
+/// `fs_watch.rs` so both filters stay in lockstep.
+pub const NOISY_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+];
+
+pub fn is_noisy_dir(name: &str) -> bool {
+    NOISY_DIRS.contains(&name)
+}
+
+/// BFS-walk `project_root` to find all git repo roots (directories containing
+/// a `.git` entry).
+///
+/// Discovery rules:
+/// - BFS walk from `project_root`, depth-capped at 4
+/// - Skip `node_modules`, `target`, `dist`, `build`, `.next`, `.cache`, hidden dirs
+///   (starting with `.`) EXCEPT the project root itself
+/// - A directory is a repo if it contains a `.git` entry (file OR dir)
+/// - Once a repo is found, do not descend further into it
+pub fn discover_repos(project_root: &Path) -> Vec<PathBuf> {
+    let mut repos: Vec<PathBuf> = Vec::new();
+    let mut queue: Vec<(PathBuf, u32)> = vec![(project_root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = queue.pop() {
+        let git_path = dir.join(".git");
+        if git_path.is_dir() {
+            repos.push(dir);
+            continue; // don't descend into a repo
+        }
+        if git_path.is_file() {
+            // .git file marker = worktree of some other repo. Don't count it
+            // as a repo, and don't descend into it either.
+            continue;
+        }
+        if depth >= 4 {
+            continue;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_noisy_dir(&name) {
+                continue;
+            }
+            if name.starts_with('.') && depth > 0 {
+                continue;
+            }
+            queue.push((path, depth + 1));
+        }
+    }
+
+    repos
+}
+
+/// Walk a project root to find all git repos, then for each repo enumerate its worktrees.
+/// Returns a flat Vec of worktree paths (each repo contributes 1+ worktrees).
+pub fn discover_worktrees(project_root: &Path) -> Vec<PathBuf> {
+    discover_repos(project_root)
+        .iter()
+        .flat_map(|repo| git::worktree_list(repo).unwrap_or_default())
+        .map(|wt| wt.path)
+        .collect()
+}
+
+pub fn take_snapshot(worktrees: &[PathBuf]) -> Snapshot {
+    let mut snap: Snapshot = HashMap::new();
+    for wt in worktrees {
+        let head = git::head_sha(wt).unwrap_or_default();
+        let dirty = git::is_dirty(wt).unwrap_or(false);
+        snap.insert(wt.clone(), WorktreeState { head, dirty });
+    }
+    snap
+}
+
+/// Returns the set of worktrees that are "linked" to a session given:
+/// - the session's snapshot
+/// - the current state of the same paths (recomputed at query time)
+/// - manual pins for that session
+///
+/// Linked rules (from spec):
+/// - Worktree did NOT exist in the snapshot (created since spawn)
+/// - HEAD differs between snapshot and current
+/// - Current dirty == true AND snapshot dirty == false (became dirty since spawn)
+/// - Worktree is in the manual pin set
+pub fn compute_linked(
+    snapshot: &Snapshot,
+    current_worktrees: &[PathBuf],
+    manual_pins: &HashSet<PathBuf>,
+) -> HashSet<PathBuf> {
+    let mut linked: HashSet<PathBuf> = HashSet::new();
+
+    for wt in current_worktrees {
+        if manual_pins.contains(wt) {
+            linked.insert(wt.clone());
+            continue;
+        }
+
+        let cur_head = git::head_sha(wt).unwrap_or_default();
+        let cur_dirty = git::is_dirty(wt).unwrap_or(false);
+
+        match snapshot.get(wt) {
+            None => {
+                linked.insert(wt.clone());
+            }
+            Some(prev) => {
+                if prev.head != cur_head {
+                    linked.insert(wt.clone());
+                } else if cur_dirty && !prev.dirty {
+                    linked.insert(wt.clone());
+                }
+            }
+        }
+    }
+
+    // Also: any path in manual_pins that isn't in current_worktrees should still be
+    // considered "linked" intent — but only if it still exists on disk.
+    // (User may have manually pinned, then the worktree moved.)
+    for pin in manual_pins {
+        if pin.exists() && !linked.contains(pin) {
+            linked.insert(pin.clone());
+        }
+    }
+
+    linked
+}
