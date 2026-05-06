@@ -4,9 +4,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import {
   isPermissionGranted,
+  onAction,
+  registerActionTypes,
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { check as checkUpdate, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -747,6 +750,10 @@ export default function App() {
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { paneTitlesRef.current = paneTitles; }, [paneTitles]);
 
+  const pendingNotifyRef = useRef<Map<number, { tabId: string; paneId: string }>>(new Map());
+  const lastNotifyRef = useRef<{ tabId: string; paneId: string } | null>(null);
+  const nextNotifyIdRef = useRef<number>(1);
+
   const themeInitDone = useRef(false);
   useEffect(() => {
     document.body.className = themeName === "light" ? "theme-light" : "theme-dark";
@@ -788,6 +795,9 @@ export default function App() {
       setDefaultAgent(defAvailable ? def : (firstInstalled ?? "__shell__"));
       setRecents(loadRecents());
       notifReady.current = await ensureNotifPermission();
+      if (notifReady.current) {
+        try { await registerActionTypes([{ id: "vector-pane", actions: [] }]); } catch {}
+      }
       // Background update check — don't block startup.
       checkUpdate().then((u) => { if (u) setUpdate(u); }).catch(() => {});
       // Restore previously-open tabs. If a user explicitly picked a session,
@@ -816,6 +826,42 @@ export default function App() {
       tabsLoaded.current = true;
     })();
   }, []);
+
+  const focusTabAndPane = useCallback(async (tabId: string, paneId: string) => {
+    try {
+      const win = getCurrentWindow();
+      await win.show();
+      await win.setFocus();
+    } catch {}
+    setBellTabs((b) => { if (!b.has(tabId)) return b; const n = new Set(b); n.delete(tabId); return n; });
+    const tabExists = tabsRef.current.some((t) => t.id === tabId);
+    if (!tabExists) return;
+    setActiveId(tabId);
+    setTabs((prev) => prev.map((t) => {
+      if (t.id !== tabId) return t;
+      const leaf = findLeaf(t.root, paneId);
+      return leaf ? { ...t, activePaneId: paneId } : t;
+    }));
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const handle = await onAction((notif) => {
+          const id = typeof notif?.id === "number" ? notif.id : null;
+          const fromMap = id != null ? pendingNotifyRef.current.get(id) : undefined;
+          const target = fromMap ?? lastNotifyRef.current;
+          if (id != null) pendingNotifyRef.current.delete(id);
+          if (!target) { void getCurrentWindow().show().catch(() => {}); return; }
+          focusTabAndPane(target.tabId, target.paneId);
+        });
+        if (cancelled) handle.unregister(); else unlisten = () => handle.unregister();
+      } catch {}
+    })();
+    return () => { cancelled = true; unlisten?.(); };
+  }, [focusTabAndPane]);
 
   const pushRecent = useCallback((path: string) => {
     setRecents((prev) => {
@@ -1061,7 +1107,12 @@ export default function App() {
           const wt = cwd ? (cwd.split("/").filter(Boolean).pop() ?? cwd) : "";
           const paneTitle = paneTitlesRef.current[paneId] ?? "";
           const body = [wt, paneTitle].filter(Boolean).join(" · ") || "needs input";
-          sendNotification({ title: `${agentName} needs attention`, body });
+          // 32-bit positive id space; wrap to avoid overflow over a long session.
+          const nid = nextNotifyIdRef.current;
+          nextNotifyIdRef.current = (nid % 0x7fffffff) + 1;
+          pendingNotifyRef.current.set(nid, { tabId, paneId });
+          lastNotifyRef.current = { tabId, paneId };
+          sendNotification({ id: nid, actionTypeId: "vector-pane", title: `${agentName} needs attention`, body });
         } catch {}
       }
     }
