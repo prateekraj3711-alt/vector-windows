@@ -16,6 +16,7 @@ not a shell prompt.
   - [Claude Profiles](#claude-profiles)
   - [Pane splits](#pane-splits)
   - [File Previewer](#file-previewer)
+  - [Sidebar — files & worktrees](#sidebar--files--worktrees)
   - [Resume Claude sessions](#resume-claude-sessions)
   - [Auto-detect installed agents](#auto-detect-installed-agents)
   - [Project picker](#project-picker)
@@ -51,6 +52,15 @@ Split a tab into a grid of agent panes with `⌘D` / `⌘⇧D`, drag dividers to
 ### File Previewer
 
 ⌘-click any file path printed by an agent to open a read-only preview in a side pane on the same tab. Supports Markdown (with embedded Mermaid diagrams), standalone Mermaid, syntax-highlighted code (js/ts/py/rs/rb and other common formats), PDF, and images. ⌘⇧-click pins a second preview for side-by-side compare. Right-click any path or preview pane for **Reveal in Finder**, **Open in default app**, or **Copy path**.
+
+### Sidebar — files & worktrees
+
+A collapsible sidebar with two tabs, both scoped to the focused tab's project:
+
+- **Files** — VSCode-style tree of the project root with hidden-files toggle. Click to open a preview, ⌘⇧-click to pin a second preview. Right-click for Reveal in Finder, Open in default app, Open in installed editor (VS Code / Cursor / Zed / Windsurf / WebStorm / IntelliJ / PyCharm / Sublime), or Copy path. Tree refreshes live as the agent writes files.
+- **Worktrees** — every git repo discovered under the project, grouped by repo. Each worktree expands to show **Uncommitted** and **Committed (vs base)** changes. Click a change to open a unified diff with syntax highlighting in the preview pane. Toggle between flat and tree views from the search bar; both persist across restarts. Right-click a worktree for Reveal / Open / Open in editor.
+
+Sidebar width, active tab, collapsed state, hidden-files toggle, and worktrees view mode all persist via `~/.config/vector/ui.toml`.
 
 ### Resume Claude sessions
 
