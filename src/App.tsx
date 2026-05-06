@@ -374,6 +374,21 @@ type ClaudeProfileDto = {
 const PROFILE_COLORS = ["#7fd6b5", "#8aa8ff", "#f08a9a", "#f5b14a", "#a88af0", "#7ad3e3"];
 const DEFAULT_PROFILE_COLOR = PROFILE_COLORS[0];
 
+/** Pick black or white text for a given hex background, by relative luminance.
+ *  Falls back to the foreground muted color when the input isn't a hex string. */
+function readableTextColor(hex: string | undefined): string {
+  if (!hex || !hex.startsWith("#")) return "#0b0b0f";
+  const h = hex.slice(1);
+  const norm = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  if (norm.length !== 6) return "#0b0b0f";
+  const r = parseInt(norm.slice(0, 2), 16) / 255;
+  const g = parseInt(norm.slice(2, 4), 16) / 255;
+  const b = parseInt(norm.slice(4, 6), 16) / 255;
+  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.55 ? "#0b0b0f" : "#ffffff";
+}
+
 /** Longest-prefix folder match, mirroring backend `resolve_profile_for_path`. */
 function resolveProfileForCwd(profiles: ClaudeProfileDto[], cwd: string): ClaudeProfileDto | null {
   if (!cwd) return null;
@@ -607,6 +622,21 @@ export default function App() {
   const leafStartedMs = useRef<Record<string, number>>({});
   const markLeafStarted = useCallback((leafId: string, epoch: number) => {
     leafStartedMs.current[`${leafId}:${epoch}`] = Date.now();
+  }, []);
+  // pty.rs decodes Claude's OSC 777 payload and emits the actual session id
+  // here. We persist it as the leaf's resumeId so the next launch resumes
+  // exactly that session — independent of which one is "most recent" for the
+  // cwd. Multiple tabs on the same project no longer collapse onto the same
+  // session after a restart.
+  const captureLeafSession = useCallback((leafId: string, sessionId: string) => {
+    setTabs((prev) => prev.map((t) => ({
+      ...t,
+      root: mapAllLeaves(t.root, (leaf) =>
+        isPtyLeaf(leaf) && leaf.id === leafId && leaf.agentId === "claude" && leaf.resumeId !== sessionId
+          ? { ...leaf, resumeId: sessionId, continueLatest: false }
+          : leaf,
+      ),
+    })));
   }, []);
 
   const renameTab = useCallback((tabId: string, nextTitle: string | undefined) => {
@@ -1433,6 +1463,7 @@ export default function App() {
                   profiles={claudeProfiles}
                   cwd={tabCwd}
                   override={activePtyLeaf?.profileOverride}
+                  compact={t.id !== activeId}
                   onPick={(id) => setPaneProfileOverride(t.id, id)}
                   onManage={() => { setSettingsSection("profiles"); setSettingsOpen(true); }}
                 />
@@ -1731,6 +1762,7 @@ export default function App() {
                 getDndKind={() => dndRef.current?.kind ?? null}
                 getDndPaneId={() => dndRef.current?.kind === "pane" ? dndRef.current.paneId : null}
                 onSessionStart={markLeafStarted}
+                onSessionId={captureLeafSession}
                 paneTitles={paneTitles}
                 renamingPaneId={renamingPaneId}
                 paneRenameDraft={paneRenameDraft}
@@ -2642,10 +2674,14 @@ function SeedValidationStatus({ seedPath, validating, validation }: {
   );
 }
 
-function ProfilePill({ profiles, cwd, override, onPick, onManage }: {
+function ProfilePill({ profiles, cwd, override, compact, onPick, onManage }: {
   profiles: ClaudeProfileDto[];
   cwd: string;
   override: string | null | undefined;
+  /** Compact form for inactive tabs: full-color square with the profile's
+   *  initial; hover shows the name via tooltip. The active tab keeps the
+   *  full pill so the focused context stays legible. */
+  compact?: boolean;
   onPick: (id: string | null | undefined) => void;
   onManage: () => void;
 }) {
@@ -2680,17 +2716,26 @@ function ProfilePill({ profiles, cwd, override, onPick, onManage }: {
 
   const color = active?.color ?? "var(--muted)";
   const name = active?.name ?? "default";
+  const initial = (name[0] ?? "·").toUpperCase();
+  const fg = readableTextColor(active?.color);
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
       <span
-        className="profile-pill"
+        className={compact ? "profile-chip" : "profile-pill"}
         onClick={() => setOpen((o) => !o)}
         title={active ? `Claude profile: ${active.name}` : "Claude profile: default (~/.claude)"}
+        style={compact ? { background: color, color: fg } : undefined}
       >
-        <span className="pdot" style={{ background: color }} />
-        <span className="pname">{name}</span>
-        <span className="pcaret">▾</span>
+        {compact ? (
+          <span className="pinitial">{initial}</span>
+        ) : (
+          <>
+            <span className="pdot" style={{ background: color }} />
+            <span className="pname">{name}</span>
+            <span className="pcaret">▾</span>
+          </>
+        )}
       </span>
       {open && (
         <div className="profile-dropdown">
@@ -2803,6 +2848,7 @@ type PaneViewProps = {
   getDndKind: () => "pane" | "tab" | null;
   getDndPaneId: () => string | null;
   onSessionStart?: (leafId: string, epoch: number) => void;
+  onSessionId?: (leafId: string, sessionId: string) => void;
   paneTitles: Record<string, string>;
   renamingPaneId: string | null;
   paneRenameDraft: string;
@@ -2959,7 +3005,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -3129,6 +3175,7 @@ function PaneView(props: PaneViewProps) {
                 onTitle={onTitle}
                 onExit={() => onExitPane(leaf.id)}
                 onSessionStart={onSessionStart}
+                onSessionId={onSessionId}
                 onOpenPreview={onOpenPreview}
               />
             </div>
@@ -3192,6 +3239,7 @@ function TerminalView({
   onTitle,
   onExit,
   onSessionStart,
+  onSessionId,
   onOpenPreview,
 }: {
   tabId: string;
@@ -3211,6 +3259,7 @@ function TerminalView({
   onTitle: (tabId: string, paneId: string, title: string) => void;
   onExit: () => void;
   onSessionStart?: (leafId: string, epoch: number) => void;
+  onSessionId?: (leafId: string, sessionId: string) => void;
   onOpenPreview: (absPath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -3218,6 +3267,10 @@ function TerminalView({
   const fitRef = useRef<FitAddon | null>(null);
   const sessionRef = useRef<string | null>(null);
   const hoveredLinkRef = useRef<{ uri: string; kind: "url" | "path" } | null>(null);
+  // xterm fires `leave` between mousedown(right-button) and contextmenu, clearing
+  // hoveredLinkRef before our context-menu handler reads it. Latch the link on
+  // right-button mousedown so contextmenu still has it. Cleared on next mousedown.
+  const ctxMenuLinkRef = useRef<{ uri: string; kind: "url" | "path" } | null>(null);
   type TermMenu =
     | { kind: "link"; x: number; y: number; uri: string; linkKind: "url" | "path" }
     | { kind: "selection"; x: number; y: number; text: string };
@@ -3245,6 +3298,20 @@ function TerminalView({
       theme,
       allowProposedApi: true,
       scrollback: 10000,
+      // Inline OSC 8 hyperlinks (e.g. Claude's https://claude.ai/code/session_*
+      // URLs) are handled by xterm itself, not WebLinksAddon. Default activate
+      // calls window.open(), which WKWebView blocks. Override to route through
+      // the OS default handler instead and feed hover state into the same ref
+      // used for the right-click menu.
+      linkHandler: {
+        activate: (event: MouseEvent, text: string) => {
+          if (event && event.button !== 0) return;
+          invoke("open_path", { path: text }).catch(() => {});
+        },
+        hover: (_event: MouseEvent, text: string) => { hoveredLinkRef.current = { uri: text, kind: "url" }; },
+        leave: () => { hoveredLinkRef.current = null; },
+        allowNonHttpProtocols: false,
+      } as any,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -3312,14 +3379,24 @@ function TerminalView({
     term.open(wrapRef.current);
     termRef.current = term;
     fitRef.current = fit;
-    term.onBell(() => onBell(tabId, paneId));
+    // BEL (\x07) is too noisy as an attention signal — Claude emits it for
+    // recap rendering and other incidental events. Notifications fire only
+    // from `pty-notify` (OSC 9 / OSC 777), which Claude reserves for actual
+    // permission prompts and attention waits.
     term.onTitleChange((t) => { if (t) onTitle(tabId, paneId, t); });
 
     // Right-click on a URL/path link → Open/Copy menu.
     // Right-click on a selection (no link) → Copy / Copy as plain text menu.
     // Right-click on empty area → default browser menu.
+    const onMouseDown = (e: MouseEvent) => {
+      // Snapshot the hovered link on right-button press so contextmenu can use
+      // it even after xterm has fired its `leave` callback in between.
+      if (e.button === 2) ctxMenuLinkRef.current = hoveredLinkRef.current;
+      else ctxMenuLinkRef.current = null;
+    };
+    wrapRef.current.addEventListener("mousedown", onMouseDown, true);
     const onContextMenu = (e: MouseEvent) => {
-      const link = hoveredLinkRef.current;
+      const link = hoveredLinkRef.current ?? ctxMenuLinkRef.current;
       if (link) {
         e.preventDefault();
         e.stopPropagation();
@@ -3394,6 +3471,7 @@ function TerminalView({
     let unlistenData: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
     let unlistenNotify: UnlistenFn | null = null;
+    let unlistenSession: UnlistenFn | null = null;
     let disposed = false;
     let started = false;
     let fontsReady = false;
@@ -3446,6 +3524,13 @@ function TerminalView({
       unlistenNotify = await listen<number>(`pty-notify-${sessionId}`, () => {
         onBell(tabId, paneId);
       });
+      // Claude's OSC 777 carries the running session id. Persist it so
+      // restart resumes the same conversation per pane (no `--continue`
+      // collapse onto the most-recent session).
+      unlistenSession = await listen<string>(`pty-session-${sessionId}`, (e) => {
+        const sid = e.payload;
+        if (sid) onSessionId?.(paneId, sid);
+      });
 
       term.onData((data) => { invoke("write_stdin", { sessionId, data }).catch(() => {}); });
       term.onResize(({ cols, rows }) => {
@@ -3491,6 +3576,7 @@ function TerminalView({
       unlistenData?.();
       unlistenExit?.();
       unlistenNotify?.();
+      unlistenSession?.();
       if (sessionRef.current) invoke("kill_session", { sessionId: sessionRef.current }).catch(() => {});
       try { previewLinkDisposable.dispose(); } catch {}
       term.dispose();

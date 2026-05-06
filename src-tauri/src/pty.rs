@@ -33,15 +33,20 @@ const MAX_EMIT_BYTES: usize = 128 * 1024;
 ///      diff-redraws.
 ///
 /// Both classes are handled across PTY read boundaries via `carry`.
-/// Returns `(filtered_bytes, osc_777_count)`. `osc_777_count` is the number
-/// of OSC 777 `warp://cli-agent;{JSON}` payloads seen in this chunk — the
-/// PTY loop uses it to emit a `pty-notify-{sid}` event for permission /
-/// attention signals coming from Claude Code.
-pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) -> (Vec<u8>, u32) {
+/// Returns `FilterResult` — filtered bytes, notify count, and any OSC 777
+/// payloads seen so the caller can extract Claude's session id.
+pub struct FilterResult {
+    pub bytes: Vec<u8>,
+    pub notify_count: u32,
+    pub osc_777_payloads: Vec<String>,
+}
+
+pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) -> FilterResult {
     carry.extend_from_slice(chunk);
     let bytes = std::mem::take(carry);
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut osc_777: u32 = 0;
+    let mut osc_777_payloads: Vec<String> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != 0x1b {
@@ -52,7 +57,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
         // At ESC — need enough lookahead to classify.
         if i + 1 >= bytes.len() {
             carry.extend_from_slice(&bytes[i..]);
-            return (out, osc_777);
+            return FilterResult { bytes: out, notify_count: osc_777, osc_777_payloads };
         }
 
         // CSI sequences: ESC [ ... final-byte. Drop ESC[?2026h / ESC[?2026l.
@@ -69,7 +74,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
             if j >= bytes.len() {
                 // Incomplete CSI at end of chunk — carry it.
                 carry.extend_from_slice(&bytes[i..]);
-                return (out, osc_777);
+                return FilterResult { bytes: out, notify_count: osc_777, osc_777_payloads };
             }
             let e = j + 1;
             let seq = &bytes[i..e];
@@ -109,7 +114,7 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
             match end {
                 None => {
                     carry.extend_from_slice(&bytes[i..]);
-                    return (out, osc_777);
+                    return FilterResult { bytes: out, notify_count: osc_777, osc_777_payloads };
                 }
                 Some(e) => {
                     let is_777 = e > i + 6
@@ -125,6 +130,19 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
                         && bytes[i + 2] == b'9'
                         && bytes[i + 3] == b';'
                         && bytes[i + 4] != b'4';
+                    if is_777 {
+                        // Capture the payload (between `OSC 777 ;` and the
+                        // terminator) for downstream session-id extraction.
+                        // Terminator is BEL (1 byte) or ESC\\ (2 bytes).
+                        let term_len = if bytes[e - 1] == 0x07 { 1 } else { 2 };
+                        let payload_start = i + 6; // past `ESC ] 7 7 7 ;`
+                        let payload_end = e - term_len;
+                        if payload_end > payload_start {
+                            if let Ok(s) = std::str::from_utf8(&bytes[payload_start..payload_end]) {
+                                osc_777_payloads.push(s.to_string());
+                            }
+                        }
+                    }
                     if is_777 || is_osc9_notify {
                         osc_777 += 1; // reused counter: "notify events in chunk"
                     } else {
@@ -140,7 +158,35 @@ pub fn filter_pty_output(carry: &mut Vec<u8>, chunk: &[u8], aggressive: bool) ->
         out.push(bytes[i]);
         i += 1;
     }
-    (out, osc_777)
+    FilterResult { bytes: out, notify_count: osc_777, osc_777_payloads }
+}
+
+/// Extract the Claude session id from an OSC 777 `warp://cli-agent;{...}`
+/// payload. Claude embeds it as a JSON `sessionId` field inside the second
+/// segment after the `;`. Returns None if the payload doesn't carry a
+/// recognizable id.
+pub fn extract_session_id(payload: &str) -> Option<String> {
+    // Find the last `{...}` JSON object in the payload and pull out
+    // the sessionId field. We don't bring in serde_json for this — a single
+    // string scan is enough and avoids paying for full JSON parsing on every
+    // notify event.
+    let key = "\"sessionId\"";
+    let mut idx = payload.find(key)?;
+    idx += key.len();
+    // Skip whitespace + colon + whitespace.
+    let bytes = payload.as_bytes();
+    while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b':') { idx += 1; }
+    if idx >= bytes.len() || bytes[idx] != b'"' { return None; }
+    idx += 1;
+    let start = idx;
+    while idx < bytes.len() && bytes[idx] != b'"' { idx += 1; }
+    if idx >= bytes.len() { return None; }
+    let id = &payload[start..idx];
+    // Sanity check: Claude session ids are UUID-shaped or long enough to be
+    // distinct. Reject anything obviously non-id to avoid clobbering resumeId
+    // with garbage.
+    if id.len() < 8 { return None; }
+    Some(id.to_string())
 }
 
 
@@ -234,16 +280,26 @@ impl PtyRegistry {
                     Ok(0) => break,
                     Ok(n) => {
                         trace_pty(&id_r, &buf[..n]);
-                        let (filtered, notify_count) = filter_pty_output(&mut carry, &buf[..n], aggressive_filter);
-                        if notify_count > 0 {
+                        let res = filter_pty_output(&mut carry, &buf[..n], aggressive_filter);
+                        if res.notify_count > 0 {
                             // Claude Code emits OSC 777 when it wants user
                             // attention (permission prompt, idle waiting).
                             // Forward as a structured event — the frontend
                             // lights up the tab + dock badge.
-                            let _ = app_r.emit(&format!("pty-notify-{id_r}"), notify_count);
+                            let _ = app_r.emit(&format!("pty-notify-{id_r}"), res.notify_count);
                         }
-                        if filtered.is_empty() { continue; }
-                        if tx.send(filtered).is_err() { break; }
+                        // Surface Claude's actual session id from any OSC 777
+                        // payload so the frontend can persist it as resumeId.
+                        // Without this, restart falls back to `--continue`,
+                        // which may pick the wrong session for the cwd.
+                        for payload in &res.osc_777_payloads {
+                            if let Some(sid) = extract_session_id(payload) {
+                                let _ = app_r.emit(&format!("pty-session-{id_r}"), sid);
+                                break;
+                            }
+                        }
+                        if res.bytes.is_empty() { continue; }
+                        if tx.send(res.bytes).is_err() { break; }
                     }
                     Err(_) => break,
                 }
