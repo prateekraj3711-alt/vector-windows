@@ -595,6 +595,12 @@ export default function App() {
   // for the top-level ~/.claude login.
   const [usageByProfile, setUsageByProfile] = useState<Record<string, ClaudeUsage>>({});
   const [usageOpen, setUsageOpen] = useState(false);
+  const [, setUsageTick] = useState(0);
+  useEffect(() => {
+    if (!usageOpen) return;
+    const id = setInterval(() => setUsageTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, [usageOpen]);
   const leafStartedMs = useRef<Record<string, number>>({});
   const markLeafStarted = useCallback((leafId: string, epoch: number) => {
     leafStartedMs.current[`${leafId}:${epoch}`] = Date.now();
@@ -1197,6 +1203,19 @@ export default function App() {
     const md = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     return `${md} ${hm}`;
   };
+  const formatExpiryRelative = (iso?: string | null): { rel: string; abs: string } | null => {
+    if (!iso) return null;
+    const ms = new Date(iso).getTime();
+    if (isNaN(ms)) return null;
+    const abs = new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const diff = ms - Date.now();
+    if (diff <= 0) return { rel: "reset", abs };
+    const totalMin = Math.floor(diff / 60_000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    const rel = h > 0 ? `${h}h ${m}m` : totalMin >= 1 ? `${m}m` : "<1m";
+    return { rel: `resets in ${rel}`, abs };
+  };
   const ctxResetText = formatResetTime(fiveHour?.resetsAt);
 
   const computeTabDropIndex = (container: HTMLElement, clientX: number): number => {
@@ -1528,7 +1547,11 @@ export default function App() {
                       <div className="usage-fill" style={{ width: `${Math.min(100, Math.max(0, bucket.utilization))}%` }} />
                     </div>
                     <div className="usage-row-reset">
-                      {bucket.resetsAt ? `Resets ${formatResetTime(bucket.resetsAt)}` : "No reset scheduled"}
+                      {(() => {
+                        const expiry = formatExpiryRelative(bucket.resetsAt);
+                        if (!expiry) return "No reset scheduled";
+                        return <>{expiry.rel} · {expiry.abs}</>;
+                      })()}
                     </div>
                   </div>
                 ) : null
