@@ -742,8 +742,10 @@ export default function App() {
   const [themeBannerDismissed, setThemeBannerDismissed] = useState<Record<string, boolean>>({});
   const tabsRef = useRef<Tab[]>([]);
   const agentsRef = useRef<AgentMeta[]>([]);
+  const paneTitlesRef = useRef<Record<string, string>>({});
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => { agentsRef.current = agents; }, [agents]);
+  useEffect(() => { paneTitlesRef.current = paneTitles; }, [paneTitles]);
 
   const themeInitDone = useRef(false);
   useEffect(() => {
@@ -1048,16 +1050,22 @@ export default function App() {
     const isActive = tabId === activeId;
     if (!windowFocused || !isActive) {
       setBellTabs((b) => { const n = new Set(b); n.add(tabId); return n; });
-      const tab = tabs.find((t) => t.id === tabId);
+      const tab = tabsRef.current.find((t) => t.id === tabId);
       const leaf = tab ? findLeaf(tab.root, paneId) : null;
       const ptyAgentId = leaf && isPtyLeaf(leaf) ? leaf.agentId : undefined;
-      const agent = agents.find((a) => a.id === ptyAgentId);
-      const label = agent?.label ?? ptyAgentId ?? "Agent";
+      const agent = agentsRef.current.find((a) => a.id === ptyAgentId);
+      const agentName = agent?.label ?? ptyAgentId ?? "Agent";
       if (notifReady.current) {
-        try { sendNotification({ title: "Vector", body: `${label} needs input` }); } catch {}
+        try {
+          const cwd = leaf && isPtyLeaf(leaf) ? (leaf.cwd ?? "") : "";
+          const wt = cwd ? (cwd.split("/").filter(Boolean).pop() ?? cwd) : "";
+          const paneTitle = paneTitlesRef.current[paneId] ?? "";
+          const body = [wt, paneTitle].filter(Boolean).join(" · ") || "needs input";
+          sendNotification({ title: `${agentName} needs attention`, body });
+        } catch {}
       }
     }
-  }, [activeId, tabs, agents]);
+  }, [activeId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
