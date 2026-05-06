@@ -388,7 +388,14 @@ function resolveProfileForCwd(profiles: ClaudeProfileDto[], cwd: string): Claude
   return best?.profile ?? null;
 }
 
-const darkTheme: ITheme = { background: "#0b0b0f", foreground: "#e6e6e6", cursor: "#e6e6e6" };
+const darkTheme: ITheme = {
+  background: "#0b0b0f",
+  foreground: "#e6e6e6",
+  cursor: "#e6e6e6",
+  selectionBackground: "#3a5f8a",
+  selectionInactiveBackground: "#2a3f5a",
+  selectionForeground: "#ffffff",
+};
 // Solarized Light: easy on the eyes
 const lightTheme: ITheme = {
   background: "#fdf6e3",
@@ -398,6 +405,9 @@ const lightTheme: ITheme = {
   blue: "#268bd2", magenta: "#d33682", cyan: "#2aa198", white: "#eee8d5",
   brightBlack: "#002b36", brightRed: "#cb4b16", brightGreen: "#586e75", brightYellow: "#657b83",
   brightBlue: "#839496", brightMagenta: "#6c71c4", brightCyan: "#93a1a1", brightWhite: "#fdf6e3",
+  selectionBackground: "#a8c7fa",
+  selectionInactiveBackground: "#cfd8ea",
+  selectionForeground: "#1a1a1a",
 };
 
 const AGENT_COLORS: Record<string, string> = {

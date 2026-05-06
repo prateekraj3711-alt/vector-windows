@@ -42,3 +42,21 @@
 .diff-line.diff-meta { color: #888; }
 .diff-gutter { display: inline-block; width: 1.2em; user-select: none; opacity: 0.6; }
 .diff-content { white-space: pre; }
+
+/* Preview / file viewer selection */
+.md-preview ::selection,
+.diff-renderer ::selection {
+  background: rgba(58, 95, 138, 0.65);
+  color: inherit;
+}
+.theme-light .md-preview ::selection,
+.theme-light .diff-renderer ::selection {
+  background: rgba(168, 199, 250, 0.65);
+}
+
+/* Sidebar: no text selection */
+.sidebar-rail,
+.sidebar-panel {
+  user-select: none;
+  -webkit-user-select: none;
+}
