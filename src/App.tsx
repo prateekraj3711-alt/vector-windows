@@ -2179,6 +2179,8 @@ function SettingsModal({
                     <button className={orientation === "vertical" ? "on" : ""} onClick={() => onOrientation("vertical")}>Side</button>
                   </div>
                 </div>
+                <AutostartRow />
+
                 <div className="settings-row">
                   <span>Font family</span>
                   <input
@@ -2253,6 +2255,46 @@ function SettingsModal({
             {section === "profiles" && <ProfilesSection profiles={profiles} onChanged={onProfilesChanged} />}
           </section>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AutostartRow() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { isEnabled } = await import("@tauri-apps/plugin-autostart");
+        const v = await isEnabled();
+        if (!cancelled) setEnabled(v);
+      } catch { if (!cancelled) setEnabled(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const toggle = async (next: boolean) => {
+    try {
+      const { enable, disable } = await import("@tauri-apps/plugin-autostart");
+      if (next) await enable(); else await disable();
+      setEnabled(next);
+    } catch {}
+  };
+  const loading = enabled === null;
+  return (
+    <div className="settings-row">
+      <span>Open at login</span>
+      <div className="seg">
+        <button
+          className={enabled === true ? "on" : ""}
+          disabled={loading}
+          onClick={() => { if (enabled !== true) void toggle(true); }}
+        >Yes</button>
+        <button
+          className={enabled === false ? "on" : ""}
+          disabled={loading}
+          onClick={() => { if (enabled !== false) void toggle(false); }}
+        >No</button>
       </div>
     </div>
   );
