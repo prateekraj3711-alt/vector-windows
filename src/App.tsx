@@ -1188,6 +1188,24 @@ export default function App() {
 
   const activeTab = tabs.find((t) => t.id === activeId);
   const activeLeaf = activeTab ? findLeaf(activeTab.root, activeTab.activePaneId) : null;
+
+  const [lastFocusedPtyPaneId, setLastFocusedPtyPaneId] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeLeaf && isPtyLeaf(activeLeaf)) setLastFocusedPtyPaneId(activeLeaf.id);
+  }, [activeLeaf]);
+
+  const [pinned, setPinned] = useState<Record<string, string[]>>({});
+  const pinKey: string | null = lastFocusedPtyPaneId ? `pane:${lastFocusedPtyPaneId}` : null;
+  const pinnedForCurrent = pinKey ? (pinned[pinKey] ?? []) : [];
+  const togglePin = useCallback((path: string) => {
+    if (!pinKey) return;
+    setPinned((p) => {
+      const cur = p[pinKey] ?? [];
+      const next = cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path];
+      return { ...p, [pinKey]: next };
+    });
+  }, [pinKey]);
+
   const xtermTheme: ITheme = useMemo(() => {
     if (themeName === "custom" && customTheme) return customTheme;
     return themeName === "light" ? lightTheme : darkTheme;
@@ -1523,6 +1541,9 @@ export default function App() {
         }
         onOpenPreview={openPreview}
         activePreviewPath={activeLeaf && !isPtyLeaf(activeLeaf) ? activeLeaf.filePath : null}
+        pinnedPaths={pinnedForCurrent}
+        pinEnabled={pinKey != null}
+        onTogglePin={togglePin}
       />
       {update && (
         <div className="update-banner">

@@ -55,12 +55,18 @@ export function Sidebar({
   sessionId,
   onOpenPreview,
   activePreviewPath,
+  pinnedPaths,
+  pinEnabled,
+  onTogglePin,
 }: {
   onOpenSettings?: () => void;
   projectRoot?: string | null;
   sessionId?: string | null;
   onOpenPreview?: (filePath: string, line: number | undefined, col: number | undefined, opts: { pin: boolean; mode?: "file" | "diff"; baseRef?: string }) => void;
   activePreviewPath?: string | null;
+  pinnedPaths: string[];
+  pinEnabled: boolean;
+  onTogglePin: (path: string) => void;
 }) {
   const { state, update, hydrated } = useSidebarState();
   const { sidebar_collapsed, sidebar_active_tab, sidebar_width } = state;
@@ -140,6 +146,9 @@ export function Sidebar({
                 changesView={state.worktrees_view_mode}
                 onChangesView={(m) => update({ worktrees_view_mode: m })}
                 activePath={activePreviewPath ?? null}
+                pinnedPaths={pinnedPaths}
+                pinEnabled={pinEnabled}
+                onTogglePin={onTogglePin}
               />
             )}
           </div>
