@@ -2888,6 +2888,26 @@ function AgentSwitcher({
   );
 }
 
+function ShellIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <polyline points="3,5 7,8 3,11" />
+      <line x1="8.5" y1="11.5" x2="13" y2="11.5" />
+    </svg>
+  );
+}
+
 function ShellPanel({
   leaf,
   onCollapse,
@@ -2946,7 +2966,7 @@ function ShellPanel({
         style={{ flex: 1 - (leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO) }}
       >
         <div className="pane-shell-header">
-          <span className="pane-shell-header__icon" aria-hidden>{">_"}</span>
+          <ShellIcon className="pane-shell-header__icon" />
           <span className="pane-shell-header__title">shell</span>
           <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
           <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
@@ -3507,7 +3527,7 @@ function PaneView(props: PaneViewProps) {
                   onClick={() => onToggleShell(leaf.id)}
                   title="Toggle Shell (⌃`)"
                 >
-                  <span className="pane-shell-bar__icon" aria-hidden>{">_"}</span>
+                  <ShellIcon className="pane-shell-bar__icon" />
                   <span className="pane-shell-bar__label">shell</span>
                   <span className="pane-shell-bar__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
                   <span className="pane-shell-bar__hint">⌃`</span>
