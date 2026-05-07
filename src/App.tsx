@@ -1112,6 +1112,27 @@ export default function App() {
       : t));
   }, []);
 
+  const updateLeafShell = useCallback((leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => {
+    setTabs((prev) => prev.map((tab) => ({
+      ...tab,
+      root: mapAllLeaves(tab.root, (leaf) =>
+        isPtyLeaf(leaf) && leaf.id === leafId ? updateShell(ensureShellState(leaf), patch) : leaf,
+      ),
+    })));
+  }, []);
+
+  const toggleShell = useCallback(async (leafId: string) => {
+    const leaf = tabsRef.current.reduce<PaneLeaf | null>((found, tab) => found ?? findLeaf(tab.root, leafId), null);
+    if (!leaf || !isPtyLeaf(leaf)) return;
+    const cur = leaf.shell?.expanded ?? false;
+    if (!cur) {
+      const cwd = await (invoke<string | null>("read_agent_cwd", { sessionId: leafId }).catch(() => null));
+      updateLeafShell(leafId, { expanded: true, cwd: cwd ?? leaf.cwd });
+    } else {
+      updateLeafShell(leafId, { expanded: false });
+    }
+  }, [updateLeafShell]);
+
   const changeActiveAgent = useCallback((agentId: string) => {
     setTabs((prev) => prev.map((t) => t.id === activeId
       ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 }) : leaf) }
@@ -1806,6 +1827,7 @@ export default function App() {
                 onDismissThemeBanner={(paneId) => setThemeBannerDismissed((m) => ({ ...m, [paneId]: true }))}
                 ctxResetText={ctxResetText || undefined}
                 onOpenUsage={() => setUsageOpen(true)}
+                onToggleShell={toggleShell}
               />
             </div>
           ))}
@@ -2891,6 +2913,7 @@ type PaneViewProps = {
   onDismissThemeBanner: (paneId: string) => void;
   ctxResetText?: string;
   onOpenUsage?: () => void;
+  onToggleShell: (leafId: string) => void;
 };
 
 function PaneTitleBar({
@@ -3047,7 +3070,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage, onToggleShell } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -3193,35 +3216,54 @@ function PaneView(props: PaneViewProps) {
               />
             )}
             <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
-              {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
-                <div className="theme-stale-banner">
-                  <span>Theme changed — restart agent to apply.</span>
-                  <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
-                  <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+              <div className="pane-leaf-vert">
+                {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
+                  <div className="theme-stale-banner">
+                    <span>Theme changed — restart agent to apply.</span>
+                    <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
+                    <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+                  </div>
+                )}
+                <div className="pane-agent-area" style={{ flex: leaf.shell?.expanded ? leaf.shell.ratio : 1 }}>
+                  <TerminalView
+                    key={`${leaf.id}-${leaf.epoch}`}
+                    tabId={tabId}
+                    paneId={leaf.id}
+                    agentId={leaf.agentId}
+                    cwd={leaf.cwd}
+                    resumeId={leaf.resumeId}
+                    continueLatest={leaf.continueLatest}
+                    profileOverride={leaf.profileOverride}
+                    epoch={leaf.epoch}
+                    visible={tabVisible}
+                    focused={isActive}
+                    theme={theme}
+                    fontFamily={fontFamily}
+                    fontSize={fontSize}
+                    onBell={onBell}
+                    onTitle={onTitle}
+                    onExit={() => onExitPane(leaf.id)}
+                    onSessionStart={onSessionStart}
+                    onSessionId={onSessionId}
+                    onOpenPreview={onOpenPreview}
+                  />
                 </div>
-              )}
-              <TerminalView
-                key={`${leaf.id}-${leaf.epoch}`}
-                tabId={tabId}
-                paneId={leaf.id}
-                agentId={leaf.agentId}
-                cwd={leaf.cwd}
-                resumeId={leaf.resumeId}
-                continueLatest={leaf.continueLatest}
-                profileOverride={leaf.profileOverride}
-                epoch={leaf.epoch}
-                visible={tabVisible}
-                focused={isActive}
-                theme={theme}
-                fontFamily={fontFamily}
-                fontSize={fontSize}
-                onBell={onBell}
-                onTitle={onTitle}
-                onExit={() => onExitPane(leaf.id)}
-                onSessionStart={onSessionStart}
-                onSessionId={onSessionId}
-                onOpenPreview={onOpenPreview}
-              />
+                {leaf.shell?.expanded && (
+                  // TODO(Task 6): <ShellPanel leaf={leaf} ... />
+                  null
+                )}
+                <button
+                  className="pane-shell-bar"
+                  onClick={() => onToggleShell(leaf.id)}
+                  title="Toggle Shell (⌃`)"
+                >
+                  <span className="pane-shell-bar__icon" aria-hidden>▣</span>
+                  <span className="pane-shell-bar__label">Shell</span>
+                  <span className="pane-shell-bar__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
+                  <span className="pane-shell-bar__hint">⌃`</span>
+                  <span className="pane-shell-bar__chev">{leaf.shell?.expanded ? "▾" : "▴"}</span>
+                </button>
+              </div>
             </div>
           </div>
         );
