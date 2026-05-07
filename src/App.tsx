@@ -1828,6 +1828,7 @@ export default function App() {
                 ctxResetText={ctxResetText || undefined}
                 onOpenUsage={() => setUsageOpen(true)}
                 onToggleShell={toggleShell}
+                onLeafShellChange={updateLeafShell}
               />
             </div>
           ))}
@@ -2877,6 +2878,69 @@ function AgentSwitcher({
   );
 }
 
+function ShellPanel({
+  leaf,
+  onCollapse,
+  onResize,
+}: {
+  leaf: PtyLeaf;
+  onCollapse: () => void;
+  onResize: (ratio: number) => void;
+}) {
+  const sessionId = shellSessionId(leaf.id);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{ startY: number; startRatio: number; height: number } | null>(null);
+
+  const onDragStart = (e: React.PointerEvent) => {
+    const rect = containerRef.current?.parentElement?.getBoundingClientRect();
+    if (!rect) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStateRef.current = {
+      startY: e.clientY,
+      startRatio: leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO,
+      height: rect.height,
+    };
+  };
+  const onDragMove = (e: React.PointerEvent) => {
+    const s = dragStateRef.current;
+    if (!s) return;
+    const delta = (e.clientY - s.startY) / s.height;
+    const next = Math.min(SHELL_MAX_RATIO, Math.max(SHELL_MIN_RATIO, s.startRatio + delta));
+    onResize(next);
+  };
+  const onDragEnd = (e: React.PointerEvent) => {
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragStateRef.current = null;
+  };
+
+  return (
+    <>
+      <div
+        className="pane-shell-divider"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        title="Drag to resize"
+      />
+      <div
+        ref={containerRef}
+        className="pane-shell-panel"
+        style={{ flex: 1 - (leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO) }}
+      >
+        <div className="pane-shell-header">
+          <span className="pane-shell-header__title">Shell</span>
+          <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
+          <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
+        </div>
+        {/* Task 7 will replace this with <ShellTerminalView ... /> */}
+        <div style={{ flex: 1, padding: 12, fontFamily: "var(--mono-font, monospace)", fontSize: 11, opacity: 0.5, overflow: "auto" }}>
+          shell pty placeholder · session={sessionId}
+        </div>
+      </div>
+    </>
+  );
+}
+
 type PaneViewProps = {
   tabId: string;
   root: PaneNode;
@@ -2914,6 +2978,7 @@ type PaneViewProps = {
   ctxResetText?: string;
   onOpenUsage?: () => void;
   onToggleShell: (leafId: string) => void;
+  onLeafShellChange: (leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => void;
 };
 
 function PaneTitleBar({
@@ -3070,7 +3135,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage, onToggleShell } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage, onToggleShell, onLeafShellChange } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -3249,8 +3314,11 @@ function PaneView(props: PaneViewProps) {
                   />
                 </div>
                 {leaf.shell?.expanded && (
-                  // TODO(Task 6): <ShellPanel leaf={leaf} ... />
-                  null
+                  <ShellPanel
+                    leaf={leaf}
+                    onCollapse={() => onLeafShellChange(leaf.id, { expanded: false })}
+                    onResize={(ratio) => onLeafShellChange(leaf.id, { ratio })}
+                  />
                 )}
                 <button
                   className="pane-shell-bar"
