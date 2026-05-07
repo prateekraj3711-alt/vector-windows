@@ -54,9 +54,14 @@ export function makeAutocompleteAddon(opts: AutocompleteOptions): ITerminalAddon
         el.style.pointerEvents = "none";
         el.style.fontFamily = fontFamily;
         el.style.fontSize = `${fontSize}px`;
-        el.style.lineHeight = "1";
+        el.style.lineHeight = `${term?.options.lineHeight ?? 1}`;
+        el.style.letterSpacing = `${term?.options.letterSpacing ?? 0}px`;
         el.style.whiteSpace = "pre";
+        el.style.padding = "0";
+        el.style.margin = "0";
+        el.style.boxSizing = "content-box";
         el.style.zIndex = "1";
+        el.style.overflow = "hidden";
         el.textContent = tail;
       });
     }
