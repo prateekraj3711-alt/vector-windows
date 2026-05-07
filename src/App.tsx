@@ -3005,6 +3005,7 @@ function ShellTerminalView({
       fontFamily,
       fontSize,
       cursorBlink: true,
+      cursorStyle: "bar",
       theme,
       allowProposedApi: true,
       scrollback: 5000,
