@@ -18,6 +18,15 @@ export function makeAutocompleteAddon(opts: AutocompleteOptions): ITerminalAddon
     suggestion = null;
   }
 
+  let pendingRefresh = 0;
+  function scheduleRefresh() {
+    if (pendingRefresh) return;
+    pendingRefresh = requestAnimationFrame(() => {
+      pendingRefresh = 0;
+      refresh();
+    });
+  }
+
   function refresh() {
     if (!term) return;
     clearGhost();
@@ -38,11 +47,14 @@ export function makeAutocompleteAddon(opts: AutocompleteOptions): ITerminalAddon
       height: 1,
     }) ?? null;
     if (decoration) {
+      const fontFamily = (term.options.fontFamily as string | undefined) ?? "monospace";
+      const fontSize = term.options.fontSize ?? 12;
       decoration.onRender((el) => {
         el.style.color = "rgba(180,180,180,0.45)";
         el.style.pointerEvents = "none";
-        el.style.fontFamily = "inherit";
-        el.style.fontSize = "inherit";
+        el.style.fontFamily = fontFamily;
+        el.style.fontSize = `${fontSize}px`;
+        el.style.lineHeight = "1";
         el.style.whiteSpace = "pre";
         el.style.zIndex = "1";
         el.textContent = tail;
@@ -100,11 +112,12 @@ export function makeAutocompleteAddon(opts: AutocompleteOptions): ITerminalAddon
               return;
             }
           }
-          refresh();
+          scheduleRefresh();
         }),
       );
     },
     dispose() {
+      if (pendingRefresh) { cancelAnimationFrame(pendingRefresh); pendingRefresh = 0; }
       clearGhost();
       // Reset the key event handler to a pass-through so it no longer intercepts.
       if (term) {
