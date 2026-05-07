@@ -3328,7 +3328,7 @@ function PaneView(props: PaneViewProps) {
         const tl = x < EPS && y < EPS ? R : "0";
         const tr = x + w > 1 - EPS && y < EPS ? R : "0";
         const br = x + w > 1 - EPS && y + h > 1 - EPS ? R : "0";
-        const bl = x < EPS && y + h > 1 - EPS ? R : "0";
+        const bl = "0";
         if (leaf.kind === "preview") {
           return (
             <div
