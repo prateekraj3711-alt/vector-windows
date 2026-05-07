@@ -2946,6 +2946,7 @@ function ShellPanel({
         style={{ flex: 1 - (leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO) }}
       >
         <div className="pane-shell-header">
+          <span className="pane-shell-header__icon" aria-hidden>▣</span>
           <span className="pane-shell-header__title">Shell</span>
           <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
           <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
