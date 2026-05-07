@@ -1126,6 +1126,7 @@ export default function App() {
   const toggleShell = useCallback(async (leafId: string) => {
     const leaf = tabsRef.current.reduce<PaneLeaf | null>((found, tab) => found ?? findLeaf(tab.root, leafId), null);
     if (!leaf || !isPtyLeaf(leaf)) return;
+    if (leaf.agentId === "__shell__") return;
     const cur = leaf.shell?.expanded ?? false;
     if (!cur) {
       const cwd = await (invoke<string | null>("read_agent_cwd", { sessionId: leafId }).catch(() => null));
@@ -3505,7 +3506,7 @@ function PaneView(props: PaneViewProps) {
                     onOpenPreview={onOpenPreview}
                   />
                 </div>
-                {leaf.shell?.expanded && (
+                {leaf.agentId !== "__shell__" && leaf.shell?.expanded && (
                   <ShellPanel
                     leaf={leaf}
                     onCollapse={() => onLeafShellChange(leaf.id, { expanded: false })}
@@ -3516,6 +3517,7 @@ function PaneView(props: PaneViewProps) {
                     onLeafShellChange={onLeafShellChange}
                   />
                 )}
+                {leaf.agentId !== "__shell__" && (
                 <button
                   className="pane-shell-bar"
                   onClick={() => onToggleShell(leaf.id)}
@@ -3527,6 +3529,7 @@ function PaneView(props: PaneViewProps) {
                   <span className="pane-shell-bar__hint">⌃`</span>
                   <span className="pane-shell-bar__chev">{leaf.shell?.expanded ? "▾" : "▴"}</span>
                 </button>
+                )}
               </div>
             </div>
           </div>
