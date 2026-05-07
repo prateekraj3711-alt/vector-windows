@@ -2946,8 +2946,8 @@ function ShellPanel({
         style={{ flex: 1 - (leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO) }}
       >
         <div className="pane-shell-header">
-          <span className="pane-shell-header__icon" aria-hidden>▣</span>
-          <span className="pane-shell-header__title">Shell</span>
+          <span className="pane-shell-header__icon" aria-hidden>{">_"}</span>
+          <span className="pane-shell-header__title">shell</span>
           <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
           <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
         </div>
@@ -3507,8 +3507,8 @@ function PaneView(props: PaneViewProps) {
                   onClick={() => onToggleShell(leaf.id)}
                   title="Toggle Shell (⌃`)"
                 >
-                  <span className="pane-shell-bar__icon" aria-hidden>▣</span>
-                  <span className="pane-shell-bar__label">Shell</span>
+                  <span className="pane-shell-bar__icon" aria-hidden>{">_"}</span>
+                  <span className="pane-shell-bar__label">shell</span>
                   <span className="pane-shell-bar__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
                   <span className="pane-shell-bar__hint">⌃`</span>
                 </button>
