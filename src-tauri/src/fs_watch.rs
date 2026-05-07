@@ -72,10 +72,14 @@ pub fn start_watcher(
                             .drain()
                             .map(|p| p.to_string_lossy().to_string())
                             .collect();
+                        let payload = serde_json::json!({ "paths": paths });
                         let _ = app_clone.emit(
                             &format!("fs-changed-{}", session_id_clone),
-                            serde_json::json!({ "paths": paths }),
+                            payload.clone(),
                         );
+                        // Also broadcast globally so views without a sessionId
+                        // (preview pane diff, worktree change list) can refresh.
+                        let _ = app_clone.emit("fs-changed", payload);
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,

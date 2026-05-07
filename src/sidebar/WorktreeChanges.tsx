@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 type ChangeEntry = {
   path: string;
@@ -27,18 +28,48 @@ export function WorktreeChanges({ worktreePath, viewMode, onOpenPreview, activeP
   const [changes, setChanges] = useState<Changes | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const reloadTimer = useRef<number | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setChanges(null);
-    setError(null);
-    invoke<Changes>("worktree_changes", { worktree: worktreePath, baseRef: null })
-      .then((c) => { if (!cancelled) setChanges(c); })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        const err = e as { message?: string };
-        setError(String(err?.message ?? e));
-      });
-    return () => { cancelled = true; };
+    let unlisten: UnlistenFn | undefined;
+
+    const load = (initial: boolean) => {
+      if (initial) {
+        setChanges(null);
+        setError(null);
+      }
+      invoke<Changes>("worktree_changes", { worktree: worktreePath, baseRef: null })
+        .then((c) => { if (!cancelled) setChanges(c); })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          const err = e as { message?: string };
+          setError(String(err?.message ?? e));
+        });
+    };
+
+    load(true);
+
+    const scheduleReload = () => {
+      if (reloadTimer.current != null) window.clearTimeout(reloadTimer.current);
+      reloadTimer.current = window.setTimeout(() => {
+        reloadTimer.current = null;
+        if (!cancelled) load(false);
+      }, 200);
+    };
+
+    listen<{ paths: string[] }>("fs-changed", (ev) => {
+      const hit = ev.payload.paths.some((p) => p === worktreePath || p.startsWith(worktreePath + "/"));
+      if (hit) scheduleReload();
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+
+    return () => {
+      cancelled = true;
+      if (reloadTimer.current != null) window.clearTimeout(reloadTimer.current);
+      if (unlisten) unlisten();
+    };
   }, [worktreePath]);
 
   if (error) {

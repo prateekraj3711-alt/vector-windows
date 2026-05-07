@@ -35,7 +35,19 @@ export function WorktreesView({ projectRoot, sessionId, onOpenPreview, changesVi
   const [expandedRepos, setExpandedRepos] = useState<Set<string>>(new Set());
   const [collapsedPinned, setCollapsedPinned] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  // Search query is independent per focused tab/pane. Two tabs (or two panes)
+  // can point at the same projectRoot, so key by sessionId (per-pane) and fall
+  // back to projectRoot only when no session is active.
+  const queryKey = sessionId ?? projectRoot ?? "";
+  const queryByKey = useRef<Map<string, string>>(new Map());
+  const [query, setQueryRaw] = useState("");
+  const setQuery = (q: string) => {
+    setQueryRaw(q);
+    queryByKey.current.set(queryKey, q);
+  };
+  useEffect(() => {
+    setQueryRaw(queryByKey.current.get(queryKey) ?? "");
+  }, [queryKey]);
   const [editors, setEditors] = useState<EditorInfo[]>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; worktreePath: string } | null>(null);
 

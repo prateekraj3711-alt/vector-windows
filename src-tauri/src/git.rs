@@ -53,6 +53,26 @@ fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
     }
 }
 
+/// Like `run_git`, but treats nonzero exit as success when stdout is non-empty.
+/// `git diff --no-index` exits 1 when files differ, with the diff on stdout.
+fn run_git_capture_stdout(args: &[&str], cwd: &Path) -> Result<String, String> {
+    let git = git_bin()?;
+    let out = Command::new(&git)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8(out.stdout)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    if out.status.success() || !stdout.is_empty() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8(out.stderr)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+        Err(stderr.trim().to_string())
+    }
+}
+
 /// `git worktree list --porcelain`
 pub fn worktree_list(repo_path: &Path) -> Result<Vec<WorktreeInfo>, String> {
     let output = run_git(&["worktree", "list", "--porcelain"], repo_path)?;
@@ -228,7 +248,29 @@ pub fn diff_file(
     let file_str = file.to_string_lossy();
     let output = match base {
         DiffBase::Head => {
-            run_git(&["diff", "--", file_str.as_ref()], worktree_path)?
+            // `git diff -- file` only shows unstaged changes. To cover staged
+            // changes too, diff against HEAD. For untracked files HEAD knows
+            // nothing about the path, so fall back to `--no-index` against
+            // /dev/null which produces a synthetic all-additions diff.
+            let tracked = run_git(&["diff", "HEAD", "--", file_str.as_ref()], worktree_path)?;
+            if !tracked.trim().is_empty() {
+                tracked
+            } else {
+                let ls = run_git(
+                    &["ls-files", "--others", "--exclude-standard", "--", file_str.as_ref()],
+                    worktree_path,
+                )
+                .unwrap_or_default();
+                if !ls.trim().is_empty() {
+                    run_git_capture_stdout(
+                        &["diff", "--no-index", "--", "/dev/null", file_str.as_ref()],
+                        worktree_path,
+                    )
+                    .unwrap_or_default()
+                } else {
+                    tracked
+                }
+            }
         }
         DiffBase::Ref => {
             if let Some(r) = base_ref {

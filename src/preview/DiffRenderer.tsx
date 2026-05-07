@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { extOf } from "./extensions";
 
 const CODE_GRAMMARS: Record<string, string> = {
@@ -46,10 +47,13 @@ export function DiffRenderer({ filePath, baseRef, theme }: Props) {
     | { status: "error"; message: string }
   >({ status: "loading" });
 
+  const reloadTimer = useRef<number | null>(null);
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      setState({ status: "loading" });
+    let unlisten: UnlistenFn | undefined;
+
+    const load = async (initial: boolean) => {
+      if (initial) setState({ status: "loading" });
       try {
         const worktree = await findWorktreeRoot(filePath);
         if (!worktree) throw new Error("Could not locate worktree root");
@@ -75,9 +79,29 @@ export function DiffRenderer({ filePath, baseRef, theme }: Props) {
         const err = e as { message?: string };
         setState({ status: "error", message: String(err?.message ?? e) });
       }
-    })();
+    };
+
+    void load(true);
+
+    const scheduleReload = () => {
+      if (reloadTimer.current != null) window.clearTimeout(reloadTimer.current);
+      reloadTimer.current = window.setTimeout(() => {
+        reloadTimer.current = null;
+        if (!cancelled) void load(false);
+      }, 200);
+    };
+
+    listen<{ paths: string[] }>("fs-changed", (ev) => {
+      if (ev.payload.paths.some((p) => p === filePath)) scheduleReload();
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+
     return () => {
       cancelled = true;
+      if (reloadTimer.current != null) window.clearTimeout(reloadTimer.current);
+      if (unlisten) unlisten();
     };
   }, [filePath, baseRef]);
 
