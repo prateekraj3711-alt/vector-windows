@@ -3499,7 +3499,7 @@ function PaneView(props: PaneViewProps) {
                     onLeafShellChange={onLeafShellChange}
                   />
                 )}
-                {leaf.agentId !== "__shell__" && (
+                {leaf.agentId !== "__shell__" && !leaf.shell?.expanded && (
                 <button
                   className="pane-shell-bar"
                   onClick={() => onToggleShell(leaf.id)}
@@ -3509,7 +3509,6 @@ function PaneView(props: PaneViewProps) {
                   <span className="pane-shell-bar__label">Shell</span>
                   <span className="pane-shell-bar__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
                   <span className="pane-shell-bar__hint">⌃`</span>
-                  <span className="pane-shell-bar__chev">{leaf.shell?.expanded ? "▾" : "▴"}</span>
                 </button>
                 )}
               </div>
