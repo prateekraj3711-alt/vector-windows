@@ -115,6 +115,12 @@ type PtyLeaf = {
   profileOverride?: string | null;
   /** User-entered pane name. Takes precedence over the PTY-emitted title. */
   userTitle?: string;
+  shell?: {
+    expanded: boolean;
+    ratio: number;    // 0..1, agent height fraction; default 0.7
+    epoch: number;    // bump to remount shell xterm
+    cwd?: string;     // last seen shell cwd from OSC 7
+  };
 };
 
 type PreviewLeaf = {
@@ -259,6 +265,25 @@ function findPreviewByFile(
 function getCwdForLeaf(node: PaneNode, leafId: string): string | null {
   if (node.kind !== "split") return node.id === leafId ? node.cwd : null;
   return getCwdForLeaf(node.children[0], leafId) ?? getCwdForLeaf(node.children[1], leafId);
+}
+
+// --- companion shell helpers ---
+const SHELL_DEFAULT_RATIO = 0.7;
+const SHELL_MIN_RATIO = 0.3;
+const SHELL_MAX_RATIO = 0.9;
+
+function shellSessionId(leafId: string) {
+  return `${leafId}:shell`;
+}
+
+function ensureShellState(leaf: PtyLeaf): PtyLeaf {
+  if (leaf.shell) return leaf;
+  return { ...leaf, shell: { expanded: false, ratio: SHELL_DEFAULT_RATIO, epoch: 0 } };
+}
+
+function updateShell(leaf: PtyLeaf, patch: Partial<NonNullable<PtyLeaf["shell"]>>): PtyLeaf {
+  const cur = leaf.shell ?? { expanded: false, ratio: SHELL_DEFAULT_RATIO, epoch: 0 };
+  return { ...leaf, shell: { ...cur, ...patch } };
 }
 
 // Compute each leaf's virtual rect [x,y,w,h] in the unit square for navigation.
