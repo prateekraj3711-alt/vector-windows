@@ -218,6 +218,38 @@ async fn start_session(
     Ok(())
 }
 
+// ——— Shell session ———
+
+#[tauri::command]
+async fn start_shell_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let program = vec![shell, "-l".to_string()];
+    let path = config::augmented_path();
+    let env: Vec<(String, String)> = vec![
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "iTerm.app".into()),
+        ("TERM_PROGRAM_VERSION".into(), "3.6.6".into()),
+        ("PATH".into(), path.to_string_lossy().to_string()),
+    ];
+    let cwd_path = cwd
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .or_else(dirs::home_dir);
+    state
+        .registry
+        .spawn(app, session_id, &program, &env, cwd_path, cols, rows, false)
+        .map_err(|e| e.to_string())
+}
+
 // ——— Claude profile commands ———
 
 #[derive(Serialize)]
@@ -714,7 +746,7 @@ fn main() {
             installed_editors: parking_lot::Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
-            list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
+            list_agents, default_agent, start_session, start_shell_session, write_stdin, resize_pty, kill_session,
             list_sessions, search_sessions, get_session, supported_resume_agents, open_path,
             set_badge_count, get_claude_usage,
             list_claude_profiles, create_claude_profile, update_claude_profile,
