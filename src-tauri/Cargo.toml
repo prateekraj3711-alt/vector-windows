@@ -30,3 +30,6 @@ notify = "=6.1.1"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = "0.14.11"
