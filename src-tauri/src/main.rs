@@ -637,8 +637,7 @@ fn read_agent_cwd(state: State<'_, AppState>, session_id: String) -> Option<Stri
 
         // PROC_PIDVNODEPATHINFO (flavor 9) returns a proc_vnodepathinfo struct
         // whose pvi_cdir.vip_path field holds the cwd as a null-terminated C string.
-        // We define the structs locally to match the stable macOS ABI; libproc already
-        // links libproc.dylib so proc_pidinfo is available as an extern symbol.
+        // libproc already links libproc.dylib so proc_pidinfo is available as an extern symbol.
         extern "C" {
             fn proc_pidinfo(
                 pid: c_int,
@@ -652,17 +651,25 @@ fn read_agent_cwd(state: State<'_, AppState>, session_id: String) -> Option<Stri
         const PROC_PIDVNODEPATHINFO: c_int = 9;
         const MAXPATHLEN: usize = 1024;
 
-        // Mirror the macOS proc_vnodepathinfo layout (two vnode_info_path entries).
-        // vnode_info_path = vnode_info (opaque prefix) + vip_path[1024].
-        // Struct sizes from XNU source / bindgen output:
-        //   vinfo_stat: 144 bytes, vnode_info: 144+4+4+8 = 160 bytes,
-        //   vnode_info_path: 160 + 1024 = 1184 bytes, proc_vnodepathinfo: 2 × 1184 = 2368 bytes.
-        // Offset of vip_path in vnode_info_path = 160.
+        // Mirror the macOS proc_vnodepathinfo ABI, verified against bindgen output
+        // from libproc-0.14.11/docs_rs/osx_libproc_bindings.rs:
+        //
+        //   vinfo_stat:        136 bytes  (XNU struct, computed from all fields)
+        //   vnode_info:        152 bytes  (vinfo_stat + vi_type:i32 + vi_pad:i32 + vi_fsid:fsid_t[8])
+        //   vnode_info_path:  1176 bytes  (vnode_info[152] + vip_path[1024])
+        //   proc_vnodepathinfo: 2352 bytes (pvi_cdir + pvi_rdir, both vnode_info_path)
+        //
+        // vip_path is at byte offset 152 within vnode_info_path.
+        #[repr(C)]
+        struct VnodeInfoPath {
+            _vip_vi: [u8; 152],             // vnode_info (opaque)
+            vip_path: [c_char; MAXPATHLEN],
+        }
+
         #[repr(C)]
         struct ProcVnodePathInfo {
-            _pvi_cdir_vi: [u8; 160],            // vnode_info (opaque)
-            pvi_cdir_path: [c_char; MAXPATHLEN],
-            _pvi_rdir: [u8; 160 + MAXPATHLEN],  // second vnode_info_path, unused
+            pvi_cdir: VnodeInfoPath,
+            _pvi_rdir: VnodeInfoPath,
         }
 
         let mut info: ProcVnodePathInfo = unsafe { mem::zeroed() };
@@ -678,7 +685,7 @@ fn read_agent_cwd(state: State<'_, AppState>, session_id: String) -> Option<Stri
         if ret <= 0 {
             return None;
         }
-        let cstr = unsafe { CStr::from_ptr(info.pvi_cdir_path.as_ptr()) };
+        let cstr = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr()) };
         cstr.to_str().ok().map(|s| s.to_string())
     }
     #[cfg(not(target_os = "macos"))]
