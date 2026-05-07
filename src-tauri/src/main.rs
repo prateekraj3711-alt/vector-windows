@@ -218,6 +218,67 @@ async fn start_session(
     Ok(())
 }
 
+// ——— Shell session ———
+
+#[tauri::command]
+async fn start_shell_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let program = vec![shell.clone(), "-l".to_string()];
+    let path = config::augmented_path();
+    let mut env: Vec<(String, String)> = vec![
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "iTerm.app".into()),
+        ("TERM_PROGRAM_VERSION".into(), "3.6.6".into()),
+        ("PATH".into(), path.to_string_lossy().to_string()),
+    ];
+
+    // ZDOTDIR trampoline: inject OSC 7 precmd silently for zsh only.
+    // For bash/fish we skip this for v0.3.3 — live cwd tracking won't update past initial.
+    if shell.ends_with("/zsh") || shell == "zsh" {
+        let zdotdir = std::env::temp_dir()
+            .join(format!("vector-zdotdir-{}", std::process::id()));
+        std::fs::create_dir_all(&zdotdir).map_err(|e| e.to_string())?;
+
+        // Capture the user's existing ZDOTDIR (or $HOME) so we can chain to their real .zshrc.
+        let user_zdotdir = std::env::var("ZDOTDIR")
+            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().to_string_lossy().to_string());
+
+        let zshrc_content = format!(
+            r#"# Vector shell trampoline — emit OSC 7 on every prompt so the host can track cwd.
+_vector_osc7() {{ printf '\033]7;file://%s%s\007' "$HOST" "$PWD" }}
+typeset -ga precmd_functions
+precmd_functions+=(_vector_osc7)
+_vector_osc7
+# Source the user's real .zshrc if present
+[ -f "{user_zdotdir}/.zshrc" ] && source "{user_zdotdir}/.zshrc"
+"#
+        );
+        let zshrc_path = zdotdir.join(".zshrc");
+        std::fs::write(&zshrc_path, &zshrc_content).map_err(|e| e.to_string())?;
+
+        env.push(("ZDOTDIR".into(), zdotdir.to_string_lossy().to_string()));
+        env.push(("VECTOR_USER_ZDOTDIR".into(), user_zdotdir));
+    }
+
+    let cwd_path = cwd
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .or_else(dirs::home_dir);
+    state
+        .registry
+        .spawn(app, session_id, &program, &env, cwd_path, cols, rows, false)
+        .map_err(|e| e.to_string())
+}
+
 // ——— Claude profile commands ———
 
 #[derive(Serialize)]
@@ -626,6 +687,72 @@ async fn open_path(path: String) -> Result<(), String> {
 }
 
 
+#[tauri::command]
+fn read_agent_cwd(state: State<'_, AppState>, session_id: String) -> Option<String> {
+    let pid = state.registry.child_pid(&session_id)?;
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CStr;
+        use std::mem;
+        use std::os::raw::{c_int, c_void, c_char};
+
+        // PROC_PIDVNODEPATHINFO (flavor 9) returns a proc_vnodepathinfo struct
+        // whose pvi_cdir.vip_path field holds the cwd as a null-terminated C string.
+        // libproc already links libproc.dylib so proc_pidinfo is available as an extern symbol.
+        extern "C" {
+            fn proc_pidinfo(
+                pid: c_int,
+                flavor: c_int,
+                arg: u64,
+                buffer: *mut c_void,
+                buffersize: c_int,
+            ) -> c_int;
+        }
+
+        const PROC_PIDVNODEPATHINFO: c_int = 9;
+        const MAXPATHLEN: usize = 1024;
+
+        // Mirror the macOS proc_vnodepathinfo ABI, verified against bindgen output
+        // from libproc-0.14.11/docs_rs/osx_libproc_bindings.rs:
+        //
+        //   vinfo_stat:        136 bytes  (XNU struct, computed from all fields)
+        //   vnode_info:        152 bytes  (vinfo_stat + vi_type:i32 + vi_pad:i32 + vi_fsid:fsid_t[8])
+        //   vnode_info_path:  1176 bytes  (vnode_info[152] + vip_path[1024])
+        //   proc_vnodepathinfo: 2352 bytes (pvi_cdir + pvi_rdir, both vnode_info_path)
+        //
+        // vip_path is at byte offset 152 within vnode_info_path.
+        #[repr(C)]
+        struct VnodeInfoPath {
+            _vip_vi: [u8; 152],             // vnode_info (opaque)
+            vip_path: [c_char; MAXPATHLEN],
+        }
+
+        #[repr(C)]
+        struct ProcVnodePathInfo {
+            pvi_cdir: VnodeInfoPath,
+            _pvi_rdir: VnodeInfoPath,
+        }
+
+        let mut info: ProcVnodePathInfo = unsafe { mem::zeroed() };
+        let ret = unsafe {
+            proc_pidinfo(
+                pid as c_int,
+                PROC_PIDVNODEPATHINFO,
+                0,
+                &mut info as *mut _ as *mut c_void,
+                mem::size_of::<ProcVnodePathInfo>() as c_int,
+            )
+        };
+        if ret <= 0 {
+            return None;
+        }
+        let cstr = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr()) };
+        cstr.to_str().ok().map(|s| s.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    { None }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -648,7 +775,7 @@ fn main() {
             installed_editors: parking_lot::Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
-            list_agents, default_agent, start_session, write_stdin, resize_pty, kill_session,
+            list_agents, default_agent, start_session, start_shell_session, write_stdin, resize_pty, kill_session,
             list_sessions, search_sessions, get_session, supported_resume_agents, open_path,
             set_badge_count, get_claude_usage,
             list_claude_profiles, create_claude_profile, update_claude_profile,
@@ -665,6 +792,7 @@ fn main() {
             sidebar::pin_worktree,
             sidebar::installed_editors,
             sidebar::open_in_editor,
+            read_agent_cwd,
         ])
         .setup(|app| {
             let _ = app.get_webview_window("main");

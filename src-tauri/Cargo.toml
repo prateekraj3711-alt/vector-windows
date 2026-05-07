@@ -1,6 +1,6 @@
 [package]
 name = "vector"
-version = "0.3.2"
+version = "0.3.3"
 description = "Vector — agent-first terminal"
 edition = "2021"
 
@@ -30,3 +30,6 @@ notify = "=6.1.1"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = "0.14.11"

@@ -23,6 +23,8 @@ import logoUrl from "./logo.png";
 import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
 import { Sidebar } from "./sidebar/Sidebar";
+import { makeCwdSniffer } from "./shell/cwdSniffer";
+import { makeAutocompleteAddon } from "./shell/autocompleteAddon";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -115,6 +117,12 @@ type PtyLeaf = {
   profileOverride?: string | null;
   /** User-entered pane name. Takes precedence over the PTY-emitted title. */
   userTitle?: string;
+  shell?: {
+    expanded: boolean;
+    ratio: number;    // 0..1, agent height fraction; default 0.7
+    epoch: number;    // bump to remount shell xterm
+    cwd?: string;     // last seen shell cwd from OSC 7
+  };
 };
 
 type PreviewLeaf = {
@@ -259,6 +267,25 @@ function findPreviewByFile(
 function getCwdForLeaf(node: PaneNode, leafId: string): string | null {
   if (node.kind !== "split") return node.id === leafId ? node.cwd : null;
   return getCwdForLeaf(node.children[0], leafId) ?? getCwdForLeaf(node.children[1], leafId);
+}
+
+// --- companion shell helpers ---
+const SHELL_DEFAULT_RATIO = 0.7;
+const SHELL_MIN_RATIO = 0.3;
+const SHELL_MAX_RATIO = 0.9;
+
+function shellSessionId(leafId: string) {
+  return `${leafId}:shell`;
+}
+
+function ensureShellState(leaf: PtyLeaf): PtyLeaf {
+  if (leaf.shell) return leaf;
+  return { ...leaf, shell: { expanded: false, ratio: SHELL_DEFAULT_RATIO, epoch: 0 } };
+}
+
+function updateShell(leaf: PtyLeaf, patch: Partial<NonNullable<PtyLeaf["shell"]>>): PtyLeaf {
+  const cur = leaf.shell ?? { expanded: false, ratio: SHELL_DEFAULT_RATIO, epoch: 0 };
+  return { ...leaf, shell: { ...cur, ...patch } };
 }
 
 // Compute each leaf's virtual rect [x,y,w,h] in the unit square for navigation.
@@ -1087,6 +1114,28 @@ export default function App() {
       : t));
   }, []);
 
+  const updateLeafShell = useCallback((leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => {
+    setTabs((prev) => prev.map((tab) => ({
+      ...tab,
+      root: mapAllLeaves(tab.root, (leaf) =>
+        isPtyLeaf(leaf) && leaf.id === leafId ? updateShell(ensureShellState(leaf), patch) : leaf,
+      ),
+    })));
+  }, []);
+
+  const toggleShell = useCallback(async (leafId: string) => {
+    const leaf = tabsRef.current.reduce<PaneLeaf | null>((found, tab) => found ?? findLeaf(tab.root, leafId), null);
+    if (!leaf || !isPtyLeaf(leaf)) return;
+    if (leaf.agentId === "__shell__") return;
+    const cur = leaf.shell?.expanded ?? false;
+    if (!cur) {
+      const cwd = await (invoke<string | null>("read_agent_cwd", { sessionId: leafId }).catch(() => null));
+      updateLeafShell(leafId, { expanded: true, cwd: cwd ?? leaf.cwd });
+    } else {
+      updateLeafShell(leafId, { expanded: false });
+    }
+  }, [updateLeafShell]);
+
   const changeActiveAgent = useCallback((agentId: string) => {
     setTabs((prev) => prev.map((t) => t.id === activeId
       ? { ...t, root: mapLeaf(t.root, t.activePaneId, (leaf) => isPtyLeaf(leaf) ? ({ ...leaf, agentId, resumeId: undefined, continueLatest: false, epoch: leaf.epoch + 1 }) : leaf) }
@@ -1150,6 +1199,13 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+` toggles companion shell on active pane
+      if (e.ctrlKey && e.key === "`" && !e.metaKey && !e.altKey && !e.isComposing) {
+        e.preventDefault();
+        const tab = tabs.find((t) => t.id === activeId);
+        if (tab) void toggleShell(tab.activePaneId);
+        return;
+      }
       // Ctrl+Tab / Ctrl+Shift+Tab cycle tabs
       if (e.ctrlKey && e.key === "Tab" && tabs.length > 1) {
         e.preventDefault();
@@ -1341,7 +1397,7 @@ export default function App() {
     const rel = h > 0 ? `${h}h ${m}m` : totalMin >= 1 ? `${m}m` : "<1m";
     return { rel: `resets in ${rel}`, abs };
   };
-  const ctxResetText = formatResetTime(fiveHour?.resetsAt);
+  const ctxResetText = formatExpiryRelative(fiveHour?.resetsAt)?.rel.replace(/^resets /, "") ?? "";
 
   const computeTabDropIndex = (container: HTMLElement, clientX: number): number => {
     const tabEls = Array.from(container.querySelectorAll<HTMLElement>(".tabs > .tab"));
@@ -1779,6 +1835,10 @@ export default function App() {
                   setThemeStaleByPane((m) => { const n = { ...m }; delete n[paneId]; return n; });
                 }}
                 onDismissThemeBanner={(paneId) => setThemeBannerDismissed((m) => ({ ...m, [paneId]: true }))}
+                ctxResetText={ctxResetText || undefined}
+                onOpenUsage={() => setUsageOpen(true)}
+                onToggleShell={toggleShell}
+                onLeafShellChange={updateLeafShell}
               />
             </div>
           ))}
@@ -2828,6 +2888,256 @@ function AgentSwitcher({
   );
 }
 
+function ShellIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <polyline points="3,5 7,8 3,11" />
+      <line x1="8.5" y1="11.5" x2="13" y2="11.5" />
+    </svg>
+  );
+}
+
+function ShellPanel({
+  leaf,
+  onCollapse,
+  onResize,
+  theme,
+  fontFamily,
+  fontSize,
+  onLeafShellChange,
+}: {
+  leaf: PtyLeaf;
+  onCollapse: () => void;
+  onResize: (ratio: number) => void;
+  theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
+  onLeafShellChange: (leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => void;
+}) {
+  const sessionId = shellSessionId(leaf.id);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{ startY: number; startRatio: number; height: number } | null>(null);
+
+  const onDragStart = (e: React.PointerEvent) => {
+    const rect = containerRef.current?.parentElement?.getBoundingClientRect();
+    if (!rect) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragStateRef.current = {
+      startY: e.clientY,
+      startRatio: leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO,
+      height: rect.height,
+    };
+  };
+  const onDragMove = (e: React.PointerEvent) => {
+    const s = dragStateRef.current;
+    if (!s) return;
+    const delta = (e.clientY - s.startY) / s.height;
+    const next = Math.min(SHELL_MAX_RATIO, Math.max(SHELL_MIN_RATIO, s.startRatio + delta));
+    onResize(next);
+  };
+  const onDragEnd = (e: React.PointerEvent) => {
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragStateRef.current = null;
+  };
+
+  return (
+    <>
+      <div
+        className="pane-shell-divider"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        title="Drag to resize"
+      />
+      <div
+        ref={containerRef}
+        className="pane-shell-panel"
+        style={{ flex: 1 - (leaf.shell?.ratio ?? SHELL_DEFAULT_RATIO) }}
+      >
+        <div className="pane-shell-header">
+          <ShellIcon className="pane-shell-header__icon" />
+          <span className="pane-shell-header__title">shell</span>
+          <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
+          <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
+        </div>
+        <ShellTerminalView
+          key={`${sessionId}-${leaf.shell?.epoch ?? 0}`}
+          leafId={leaf.id}
+          sessionId={sessionId}
+          cwd={leaf.shell?.cwd ?? leaf.cwd}
+          onCwdChange={(cwd) => onLeafShellChange(leaf.id, { cwd })}
+          theme={theme}
+          fontFamily={fontFamily}
+          fontSize={fontSize}
+        />
+      </div>
+    </>
+  );
+}
+
+function ShellTerminalView({
+  leafId,
+  sessionId,
+  cwd,
+  onCwdChange,
+  theme,
+  fontFamily,
+  fontSize,
+}: {
+  leafId: string;
+  sessionId: string;
+  cwd?: string;
+  onCwdChange: (cwd: string) => void;
+  theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const sessionRef = useRef<string | null>(null);
+
+  useEffect(() => { if (termRef.current) termRef.current.options.theme = theme; }, [theme]);
+
+  useEffect(() => {
+    const t = termRef.current;
+    if (!t) return;
+    t.options.fontFamily = fontFamily;
+    t.options.fontSize = fontSize;
+    try { fitRef.current?.fit(); } catch {}
+  }, [fontFamily, fontSize]);
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+
+    const term = new Terminal({
+      fontFamily,
+      fontSize,
+      cursorBlink: true,
+      cursorStyle: "bar",
+      theme,
+      allowProposedApi: true,
+      scrollback: 5000,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    // Swallow OSC 777 notifications — not relevant for the shell panel.
+    term.parser.registerOscHandler(777, () => true);
+    term.open(hostRef.current);
+    termRef.current = term;
+    fitRef.current = fit;
+
+    const cwdSniffer = makeCwdSniffer(onCwdChange);
+    term.loadAddon(makeAutocompleteAddon({
+      onAcceptText: (text) => { void invoke("write_stdin", { sessionId, data: text }); },
+    }));
+
+    sessionRef.current = sessionId;
+
+    let unlistenData: UnlistenFn | null = null;
+    let unlistenExit: UnlistenFn | null = null;
+    let disposed = false;
+    let started = false;
+    let lastCols = -1, lastRows = -1, stableCount = 0;
+
+    const doStart = async () => {
+      started = true;
+      try { fit.fit(); } catch {}
+      const cols = term.cols || 100;
+      const rows = term.rows || 30;
+      const ptyCols = Math.max(20, cols - 3);
+      try { term.resize(ptyCols, rows); } catch {}
+      try {
+        await invoke("start_shell_session", { sessionId, cwd: cwd ?? null, cols: ptyCols, rows });
+      } catch (err) {
+        term.writeln(`\r\n\x1b[31m[failed to start shell: ${err}]\x1b[0m`);
+      }
+    };
+
+    const poll = () => {
+      if (started || disposed) return;
+      const el = hostRef.current;
+      if (!el || el.clientWidth < 20 || el.clientHeight < 20) return;
+      try { fit.fit(); } catch {}
+      const c = term.cols, r = term.rows;
+      if (c < 20 || r < 5) return;
+      if (c === lastCols && r === lastRows) stableCount++;
+      else { lastCols = c; lastRows = r; stableCount = 0; }
+      if (stableCount >= 2) doStart();
+    };
+
+    (async () => {
+      unlistenData = await listen<string>(`pty-data-${sessionId}`, (e) => {
+        cwdSniffer.feed(e.payload);
+        // Strip OSC 7 before handing to xterm to avoid parser artifacts.
+        const stripped = e.payload.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
+        term.write(stripped);
+      });
+      unlistenExit = await listen<number>(`pty-exit-${sessionId}`, () => {
+        term.writeln("\r\n\x1b[33m[shell exited]\x1b[0m");
+      });
+
+      term.onData((data) => { invoke("write_stdin", { sessionId, data }).catch(() => {}); });
+      term.onResize(({ cols, rows }) => {
+        if (started) invoke("resize_pty", { sessionId, cols, rows }).catch(() => {});
+      });
+
+      try { await (document as any).fonts?.ready; } catch {}
+      poll();
+      window.setTimeout(() => { if (!started && !disposed) doStart(); }, 500);
+    })();
+
+    let pollTimer: number | null = null;
+    const schedulePoll = () => {
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+      pollTimer = window.setTimeout(poll, 60);
+    };
+    const ro = new ResizeObserver(() => {
+      try {
+        fit.fit();
+        const safeCols = Math.max(20, term.cols - 3);
+        if (term.cols !== safeCols) term.resize(safeCols, term.rows);
+      } catch {}
+      if (!started) schedulePoll();
+    });
+    if (hostRef.current) ro.observe(hostRef.current);
+
+    return () => {
+      disposed = true;
+      ro.disconnect();
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+      unlistenData?.();
+      unlistenExit?.();
+      invoke("kill_session", { sessionId: sessionRef.current }).catch(() => {});
+      term.dispose();
+      termRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafId, sessionId]);
+
+  return (
+    <div
+      ref={hostRef}
+      className="shell-terminal-wrap"
+      style={{ flex: 1, overflow: "hidden" }}
+      onClick={() => termRef.current?.focus()}
+    />
+  );
+}
+
 type PaneViewProps = {
   tabId: string;
   root: PaneNode;
@@ -2862,6 +3172,10 @@ type PaneViewProps = {
   themeBannerDismissed: Record<string, boolean>;
   onRestartPane: (tabId: string, paneId: string) => void;
   onDismissThemeBanner: (paneId: string) => void;
+  ctxResetText?: string;
+  onOpenUsage?: () => void;
+  onToggleShell: (leafId: string) => void;
+  onLeafShellChange: (leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => void;
 };
 
 function PaneTitleBar({
@@ -2870,6 +3184,7 @@ function PaneTitleBar({
   renaming,
   draft,
   showClose,
+  resetText,
   onStartRename,
   onDraftChange,
   onCommitRename,
@@ -2877,12 +3192,14 @@ function PaneTitleBar({
   onClose,
   onDragStart,
   onDragEnd,
+  onResetClick,
 }: {
   leaf: PtyLeaf;
   title: string;
   renaming: boolean;
   draft: string;
   showClose: boolean;
+  resetText?: string;
   onStartRename: () => void;
   onDraftChange: (v: string) => void;
   onCommitRename: () => void;
@@ -2890,6 +3207,7 @@ function PaneTitleBar({
   onClose: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onResetClick?: () => void;
 }) {
   return (
     <div
@@ -2923,6 +3241,15 @@ function PaneTitleBar({
           onDoubleClick={(e) => { e.stopPropagation(); onStartRename(); }}
           title="Double-click to rename"
         >{title}</span>
+      )}
+      {resetText && (
+        <span
+          className="pane-reset-pill"
+          title={`Anthropic context window resets ${resetText}`}
+          onClick={(e) => { e.stopPropagation(); onResetClick?.(); }}
+        >
+          resets {resetText}
+        </span>
       )}
       {showClose && (
         <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
@@ -3005,7 +3332,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage, onToggleShell, onLeafShellChange } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -3023,7 +3350,7 @@ function PaneView(props: PaneViewProps) {
         const tl = x < EPS && y < EPS ? R : "0";
         const tr = x + w > 1 - EPS && y < EPS ? R : "0";
         const br = x + w > 1 - EPS && y + h > 1 - EPS ? R : "0";
-        const bl = x < EPS && y + h > 1 - EPS ? R : "0";
+        const bl = "0";
         if (leaf.kind === "preview") {
           return (
             <div
@@ -3135,6 +3462,7 @@ function PaneView(props: PaneViewProps) {
                 renaming={renamingPaneId === leaf.id}
                 draft={paneRenameDraft}
                 showClose={leaves.length > 1}
+                resetText={isActive && leaf.agentId === "claude" && ctxResetText ? ctxResetText : undefined}
                 onStartRename={() => onStartPaneRename(leaf.id, leaf.userTitle ?? "")}
                 onDraftChange={onPaneRenameDraft}
                 onCommitRename={onCommitPaneRename}
@@ -3146,38 +3474,66 @@ function PaneView(props: PaneViewProps) {
                   onPaneDragStart(leaf.id);
                 }}
                 onDragEnd={() => onPaneDragEnd()}
+                onResetClick={onOpenUsage}
               />
             )}
             <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
-              {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
-                <div className="theme-stale-banner">
-                  <span>Theme changed — restart agent to apply.</span>
-                  <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
-                  <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+              <div className="pane-leaf-vert">
+                {themeStaleByPane[leaf.id] && !themeBannerDismissed[leaf.id] && (
+                  <div className="theme-stale-banner">
+                    <span>Theme changed — restart agent to apply.</span>
+                    <button onClick={() => onRestartPane(tabId, leaf.id)}>Restart</button>
+                    <button onClick={() => onDismissThemeBanner(leaf.id)}>Dismiss</button>
+                  </div>
+                )}
+                <div className="pane-agent-area" style={{ flex: leaf.shell?.expanded ? leaf.shell.ratio : 1 }}>
+                  <TerminalView
+                    key={`${leaf.id}-${leaf.epoch}`}
+                    tabId={tabId}
+                    paneId={leaf.id}
+                    agentId={leaf.agentId}
+                    cwd={leaf.cwd}
+                    resumeId={leaf.resumeId}
+                    continueLatest={leaf.continueLatest}
+                    profileOverride={leaf.profileOverride}
+                    epoch={leaf.epoch}
+                    visible={tabVisible}
+                    focused={isActive}
+                    theme={theme}
+                    fontFamily={fontFamily}
+                    fontSize={fontSize}
+                    onBell={onBell}
+                    onTitle={onTitle}
+                    onExit={() => onExitPane(leaf.id)}
+                    onSessionStart={onSessionStart}
+                    onSessionId={onSessionId}
+                    onOpenPreview={onOpenPreview}
+                  />
                 </div>
-              )}
-              <TerminalView
-                key={`${leaf.id}-${leaf.epoch}`}
-                tabId={tabId}
-                paneId={leaf.id}
-                agentId={leaf.agentId}
-                cwd={leaf.cwd}
-                resumeId={leaf.resumeId}
-                continueLatest={leaf.continueLatest}
-                profileOverride={leaf.profileOverride}
-                epoch={leaf.epoch}
-                visible={tabVisible}
-                focused={isActive}
-                theme={theme}
-                fontFamily={fontFamily}
-                fontSize={fontSize}
-                onBell={onBell}
-                onTitle={onTitle}
-                onExit={() => onExitPane(leaf.id)}
-                onSessionStart={onSessionStart}
-                onSessionId={onSessionId}
-                onOpenPreview={onOpenPreview}
-              />
+                {leaf.agentId !== "__shell__" && leaf.shell?.expanded && (
+                  <ShellPanel
+                    leaf={leaf}
+                    onCollapse={() => onLeafShellChange(leaf.id, { expanded: false })}
+                    onResize={(ratio) => onLeafShellChange(leaf.id, { ratio })}
+                    theme={theme}
+                    fontFamily={fontFamily}
+                    fontSize={fontSize}
+                    onLeafShellChange={onLeafShellChange}
+                  />
+                )}
+                {leaf.agentId !== "__shell__" && !leaf.shell?.expanded && (
+                <button
+                  className="pane-shell-bar"
+                  onClick={() => onToggleShell(leaf.id)}
+                  title="Toggle Shell (⌃`)"
+                >
+                  <ShellIcon className="pane-shell-bar__icon" />
+                  <span className="pane-shell-bar__label">shell</span>
+                  <span className="pane-shell-bar__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
+                  <span className="pane-shell-bar__hint">⌃`</span>
+                </button>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -3417,6 +3773,8 @@ function TerminalView({
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Let window-level handler own Ctrl+` for companion shell toggle.
+      if (e.key === "`" && e.ctrlKey && !e.metaKey && !e.altKey) return false;
       if (e.key === "Enter" && e.shiftKey) return false;
       // Let our document-capture handler own Cmd/Opt+Backspace.
       if (e.key === "Backspace" && (e.metaKey || e.altKey)) return false;
@@ -3429,6 +3787,15 @@ function TerminalView({
       }
       return true;
     });
+    // Gate ghost-text autocomplete on standalone shell-agent panes only.
+    // Loaded after attachCustomKeyEventHandler so the addon's handler (which
+    // is set last via the same setter API) takes precedence and can suppress
+    // ArrowRight when accepting a suggestion.
+    if (agentId === "__shell__") {
+      term.loadAddon(makeAutocompleteAddon({
+        onAcceptText: (text) => { void invoke("write_stdin", { sessionId, data: text }); },
+      }));
+    }
 
     // Document-capture: intercept shortcuts before the webview/xterm handle them
     // and forward the right readline sequence over the PTY.

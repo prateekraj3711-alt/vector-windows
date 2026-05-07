@@ -209,6 +209,7 @@ pub struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    pub child_pid: Option<u32>,
 }
 
 #[derive(Default)]
@@ -257,7 +258,8 @@ impl PtyRegistry {
         let writer = pair.master.take_writer()?;
         let killer = child.clone_killer();
 
-        let session = Session { master: pair.master, writer, killer };
+        let child_pid = child.process_id();
+        let session = Session { master: pair.master, writer, killer, child_pid };
         let arc = Arc::new(Mutex::new(session));
         self.sessions.lock().insert(id.clone(), arc.clone());
 
@@ -356,6 +358,12 @@ impl PtyRegistry {
         });
 
         Ok(())
+    }
+
+    pub fn child_pid(&self, id: &str) -> Option<u32> {
+        let sessions = self.sessions.lock();
+        let session = sessions.get(id)?.lock();
+        session.child_pid
     }
 
     pub fn write(&self, id: &str, data: &str) -> anyhow::Result<()> {
