@@ -230,15 +230,44 @@ async fn start_shell_session(
     rows: u16,
 ) -> Result<(), String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let program = vec![shell, "-l".to_string()];
+    let program = vec![shell.clone(), "-l".to_string()];
     let path = config::augmented_path();
-    let env: Vec<(String, String)> = vec![
+    let mut env: Vec<(String, String)> = vec![
         ("TERM".into(), "xterm-256color".into()),
         ("COLORTERM".into(), "truecolor".into()),
         ("TERM_PROGRAM".into(), "iTerm.app".into()),
         ("TERM_PROGRAM_VERSION".into(), "3.6.6".into()),
         ("PATH".into(), path.to_string_lossy().to_string()),
     ];
+
+    // ZDOTDIR trampoline: inject OSC 7 precmd silently for zsh only.
+    // For bash/fish we skip this for v0.3.3 — live cwd tracking won't update past initial.
+    if shell.ends_with("/zsh") || shell == "zsh" {
+        let zdotdir = std::env::temp_dir()
+            .join(format!("vector-zdotdir-{}", std::process::id()));
+        std::fs::create_dir_all(&zdotdir).map_err(|e| e.to_string())?;
+
+        // Capture the user's existing ZDOTDIR (or $HOME) so we can chain to their real .zshrc.
+        let user_zdotdir = std::env::var("ZDOTDIR")
+            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().to_string_lossy().to_string());
+
+        let zshrc_content = format!(
+            r#"# Vector shell trampoline — emit OSC 7 on every prompt so the host can track cwd.
+_vector_osc7() {{ printf '\033]7;file://%s%s\007' "$HOST" "$PWD" }}
+typeset -ga precmd_functions
+precmd_functions+=(_vector_osc7)
+_vector_osc7
+# Source the user's real .zshrc if present
+[ -f "{user_zdotdir}/.zshrc" ] && source "{user_zdotdir}/.zshrc"
+"#
+        );
+        let zshrc_path = zdotdir.join(".zshrc");
+        std::fs::write(&zshrc_path, &zshrc_content).map_err(|e| e.to_string())?;
+
+        env.push(("ZDOTDIR".into(), zdotdir.to_string_lossy().to_string()));
+        env.push(("VECTOR_USER_ZDOTDIR".into(), user_zdotdir));
+    }
+
     let cwd_path = cwd
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_dir())

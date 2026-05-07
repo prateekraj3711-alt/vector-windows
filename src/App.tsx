@@ -3025,12 +3025,6 @@ function ShellTerminalView({
 
     sessionRef.current = sessionId;
 
-    // Track whether we've injected the OSC 7 hook yet. We do this once,
-    // 200ms after the first PTY data chunk arrives (giving the prompt time
-    // to settle). Accepted trade-off for v0.3.3: if the user starts typing
-    // immediately the injected line may interleave with their input.
-    let installedRef = false;
-
     let unlistenData: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
     let disposed = false;
@@ -3065,18 +3059,6 @@ function ShellTerminalView({
 
     (async () => {
       unlistenData = await listen<string>(`pty-data-${sessionId}`, (e) => {
-        if (!installedRef) {
-          installedRef = true;
-          window.setTimeout(() => {
-            // Inject OSC 7 precmd hook once the shell prompt has settled.
-            // After this runs, every prompt fires OSC 7 → cwdSniffer picks it up.
-            const setup =
-              "printf '\\033]7;file://%s%s\\007' \"$(hostname)\" \"$PWD\"; " +
-              "precmd_functions+=(_vector_osc7); " +
-              "_vector_osc7(){ printf '\\033]7;file://%s%s\\007' \"$(hostname)\" \"$PWD\"; }\n";
-            invoke("write_stdin", { sessionId, data: setup }).catch(() => {});
-          }, 200);
-        }
         cwdSniffer.feed(e.payload);
         // Strip OSC 7 before handing to xterm to avoid parser artifacts.
         const stripped = e.payload.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
