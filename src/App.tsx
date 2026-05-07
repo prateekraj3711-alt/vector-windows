@@ -1779,6 +1779,8 @@ export default function App() {
                   setThemeStaleByPane((m) => { const n = { ...m }; delete n[paneId]; return n; });
                 }}
                 onDismissThemeBanner={(paneId) => setThemeBannerDismissed((m) => ({ ...m, [paneId]: true }))}
+                ctxResetText={ctxResetText || undefined}
+                onOpenUsage={() => setUsageOpen(true)}
               />
             </div>
           ))}
@@ -2862,6 +2864,8 @@ type PaneViewProps = {
   themeBannerDismissed: Record<string, boolean>;
   onRestartPane: (tabId: string, paneId: string) => void;
   onDismissThemeBanner: (paneId: string) => void;
+  ctxResetText?: string;
+  onOpenUsage?: () => void;
 };
 
 function PaneTitleBar({
@@ -2870,6 +2874,7 @@ function PaneTitleBar({
   renaming,
   draft,
   showClose,
+  resetText,
   onStartRename,
   onDraftChange,
   onCommitRename,
@@ -2877,12 +2882,14 @@ function PaneTitleBar({
   onClose,
   onDragStart,
   onDragEnd,
+  onResetClick,
 }: {
   leaf: PtyLeaf;
   title: string;
   renaming: boolean;
   draft: string;
   showClose: boolean;
+  resetText?: string;
   onStartRename: () => void;
   onDraftChange: (v: string) => void;
   onCommitRename: () => void;
@@ -2890,6 +2897,7 @@ function PaneTitleBar({
   onClose: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
+  onResetClick?: () => void;
 }) {
   return (
     <div
@@ -2923,6 +2931,15 @@ function PaneTitleBar({
           onDoubleClick={(e) => { e.stopPropagation(); onStartRename(); }}
           title="Double-click to rename"
         >{title}</span>
+      )}
+      {resetText && (
+        <span
+          className="pane-reset-pill"
+          title={`Anthropic context window resets ${resetText}`}
+          onClick={(e) => { e.stopPropagation(); onResetClick?.(); }}
+        >
+          resets {resetText}
+        </span>
       )}
       {showClose && (
         <span className="pane-close" onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close pane">×</span>
@@ -3005,7 +3022,7 @@ function computeDividers(node: PaneNode, rect: [number, number, number, number])
 }
 
 function PaneView(props: PaneViewProps) {
-  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner } = props;
+  const { tabId, root, activePaneId, tabVisible, theme, themeKind, fontFamily, fontSize, onFocusPane, onBell, onTitle, onExitPane, onResize, onPaneDragStart, onPaneDragEnd, onPaneDrop, getDndKind, getDndPaneId, onSessionStart, onSessionId, paneTitles, renamingPaneId, paneRenameDraft, onStartPaneRename, onPaneRenameDraft, onCommitPaneRename, onCancelPaneRename, onClosePane, onOpenPreview, themeStaleByPane, themeBannerDismissed, onRestartPane, onDismissThemeBanner, ctxResetText, onOpenUsage } = props;
   const leaves = flattenLeaves(root);
   const rects = leafRects(root, [0, 0, 1, 1]);
   const dividers = computeDividers(root, [0, 0, 1, 1]);
@@ -3135,6 +3152,7 @@ function PaneView(props: PaneViewProps) {
                 renaming={renamingPaneId === leaf.id}
                 draft={paneRenameDraft}
                 showClose={leaves.length > 1}
+                resetText={isActive && leaf.agentId === "claude" && ctxResetText ? ctxResetText : undefined}
                 onStartRename={() => onStartPaneRename(leaf.id, leaf.userTitle ?? "")}
                 onDraftChange={onPaneRenameDraft}
                 onCommitRename={onCommitPaneRename}
@@ -3146,6 +3164,7 @@ function PaneView(props: PaneViewProps) {
                   onPaneDragStart(leaf.id);
                 }}
                 onDragEnd={() => onPaneDragEnd()}
+                onResetClick={onOpenUsage}
               />
             )}
             <div className="pane-body" style={{ position: "absolute", inset: single ? 0 : "22px 0 0 0", display: "flex", flexDirection: "column" }}>
