@@ -24,6 +24,7 @@ import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
 import { Sidebar } from "./sidebar/Sidebar";
 import { makeCwdSniffer } from "./shell/cwdSniffer";
+import { makeAutocompleteAddon } from "./shell/autocompleteAddon";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -3010,7 +3011,9 @@ function ShellTerminalView({
     fitRef.current = fit;
 
     const cwdSniffer = makeCwdSniffer(onCwdChange);
-    /* TODO(Task 8): autocomplete addon load */
+    term.loadAddon(makeAutocompleteAddon({
+      onAcceptText: (text) => { void invoke("write_stdin", { sessionId, data: text }); },
+    }));
 
     sessionRef.current = sessionId;
 
@@ -3769,6 +3772,15 @@ function TerminalView({
       }
       return true;
     });
+    // Gate ghost-text autocomplete on standalone shell-agent panes only.
+    // Loaded after attachCustomKeyEventHandler so the addon's handler (which
+    // is set last via the same setter API) takes precedence and can suppress
+    // ArrowRight when accepting a suggestion.
+    if (agentId === "__shell__") {
+      term.loadAddon(makeAutocompleteAddon({
+        onAcceptText: (text) => { void invoke("write_stdin", { sessionId, data: text }); },
+      }));
+    }
 
     // Document-capture: intercept shortcuts before the webview/xterm handle them
     // and forward the right readline sequence over the PTY.
