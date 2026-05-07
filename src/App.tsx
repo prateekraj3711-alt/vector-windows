@@ -23,6 +23,7 @@ import logoUrl from "./logo.png";
 import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
 import { registerPreviewLinkProvider } from "./preview/linkProvider";
 import { Sidebar } from "./sidebar/Sidebar";
+import { makeCwdSniffer } from "./shell/cwdSniffer";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -2882,10 +2883,18 @@ function ShellPanel({
   leaf,
   onCollapse,
   onResize,
+  theme,
+  fontFamily,
+  fontSize,
+  onLeafShellChange,
 }: {
   leaf: PtyLeaf;
   onCollapse: () => void;
   onResize: (ratio: number) => void;
+  theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
+  onLeafShellChange: (leafId: string, patch: Partial<NonNullable<PtyLeaf["shell"]>>) => void;
 }) {
   const sessionId = shellSessionId(leaf.id);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -2932,12 +2941,185 @@ function ShellPanel({
           <span className="pane-shell-header__cwd">{leaf.shell?.cwd ?? leaf.cwd ?? ""}</span>
           <button className="pane-shell-header__close" onClick={onCollapse} aria-label="Collapse">✕</button>
         </div>
-        {/* Task 7 will replace this with <ShellTerminalView ... /> */}
-        <div style={{ flex: 1, padding: 12, fontFamily: "var(--mono-font, monospace)", fontSize: 11, opacity: 0.5, overflow: "auto" }}>
-          shell pty placeholder · session={sessionId}
-        </div>
+        <ShellTerminalView
+          key={`${sessionId}-${leaf.shell?.epoch ?? 0}`}
+          leafId={leaf.id}
+          sessionId={sessionId}
+          cwd={leaf.shell?.cwd ?? leaf.cwd}
+          onCwdChange={(cwd) => onLeafShellChange(leaf.id, { cwd })}
+          theme={theme}
+          fontFamily={fontFamily}
+          fontSize={fontSize}
+        />
       </div>
     </>
+  );
+}
+
+function ShellTerminalView({
+  leafId,
+  sessionId,
+  cwd,
+  onCwdChange,
+  theme,
+  fontFamily,
+  fontSize,
+}: {
+  leafId: string;
+  sessionId: string;
+  cwd?: string;
+  onCwdChange: (cwd: string) => void;
+  theme: ITheme;
+  fontFamily: string;
+  fontSize: number;
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const sessionRef = useRef<string | null>(null);
+
+  useEffect(() => { if (termRef.current) termRef.current.options.theme = theme; }, [theme]);
+
+  useEffect(() => {
+    const t = termRef.current;
+    if (!t) return;
+    t.options.fontFamily = fontFamily;
+    t.options.fontSize = fontSize;
+    try { fitRef.current?.fit(); } catch {}
+  }, [fontFamily, fontSize]);
+
+  useEffect(() => {
+    if (!hostRef.current) return;
+
+    const term = new Terminal({
+      fontFamily,
+      fontSize,
+      cursorBlink: true,
+      theme,
+      allowProposedApi: true,
+      scrollback: 5000,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    // Swallow OSC 777 notifications — not relevant for the shell panel.
+    term.parser.registerOscHandler(777, () => true);
+    term.open(hostRef.current);
+    termRef.current = term;
+    fitRef.current = fit;
+
+    const cwdSniffer = makeCwdSniffer(onCwdChange);
+    /* TODO(Task 8): autocomplete addon load */
+
+    sessionRef.current = sessionId;
+
+    // Track whether we've injected the OSC 7 hook yet. We do this once,
+    // 200ms after the first PTY data chunk arrives (giving the prompt time
+    // to settle). Accepted trade-off for v0.3.3: if the user starts typing
+    // immediately the injected line may interleave with their input.
+    let installedRef = false;
+
+    let unlistenData: UnlistenFn | null = null;
+    let unlistenExit: UnlistenFn | null = null;
+    let disposed = false;
+    let started = false;
+    let lastCols = -1, lastRows = -1, stableCount = 0;
+
+    const doStart = async () => {
+      started = true;
+      try { fit.fit(); } catch {}
+      const cols = term.cols || 100;
+      const rows = term.rows || 30;
+      const ptyCols = Math.max(20, cols - 3);
+      try { term.resize(ptyCols, rows); } catch {}
+      try {
+        await invoke("start_shell_session", { sessionId, cwd: cwd ?? null, cols: ptyCols, rows });
+      } catch (err) {
+        term.writeln(`\r\n\x1b[31m[failed to start shell: ${err}]\x1b[0m`);
+      }
+    };
+
+    const poll = () => {
+      if (started || disposed) return;
+      const el = hostRef.current;
+      if (!el || el.clientWidth < 20 || el.clientHeight < 20) return;
+      try { fit.fit(); } catch {}
+      const c = term.cols, r = term.rows;
+      if (c < 20 || r < 5) return;
+      if (c === lastCols && r === lastRows) stableCount++;
+      else { lastCols = c; lastRows = r; stableCount = 0; }
+      if (stableCount >= 2) doStart();
+    };
+
+    (async () => {
+      unlistenData = await listen<string>(`pty-data-${sessionId}`, (e) => {
+        if (!installedRef) {
+          installedRef = true;
+          window.setTimeout(() => {
+            // Inject OSC 7 precmd hook once the shell prompt has settled.
+            // After this runs, every prompt fires OSC 7 → cwdSniffer picks it up.
+            const setup =
+              "printf '\\033]7;file://%s%s\\007' \"$(hostname)\" \"$PWD\"; " +
+              "precmd_functions+=(_vector_osc7); " +
+              "_vector_osc7(){ printf '\\033]7;file://%s%s\\007' \"$(hostname)\" \"$PWD\"; }\n";
+            invoke("write_stdin", { sessionId, data: setup }).catch(() => {});
+          }, 200);
+        }
+        cwdSniffer.feed(e.payload);
+        // Strip OSC 7 before handing to xterm to avoid parser artifacts.
+        const stripped = e.payload.replace(/\x1b\]7;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "");
+        term.write(stripped);
+      });
+      unlistenExit = await listen<number>(`pty-exit-${sessionId}`, () => {
+        term.writeln("\r\n\x1b[33m[shell exited]\x1b[0m");
+      });
+
+      term.onData((data) => { invoke("write_stdin", { sessionId, data }).catch(() => {}); });
+      term.onResize(({ cols, rows }) => {
+        if (started) invoke("resize_pty", { sessionId, cols, rows }).catch(() => {});
+      });
+
+      try { await (document as any).fonts?.ready; } catch {}
+      poll();
+      window.setTimeout(() => { if (!started && !disposed) doStart(); }, 500);
+    })();
+
+    let pollTimer: number | null = null;
+    const schedulePoll = () => {
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+      pollTimer = window.setTimeout(poll, 60);
+    };
+    const ro = new ResizeObserver(() => {
+      try {
+        fit.fit();
+        const safeCols = Math.max(20, term.cols - 3);
+        if (term.cols !== safeCols) term.resize(safeCols, term.rows);
+      } catch {}
+      if (!started) schedulePoll();
+    });
+    if (hostRef.current) ro.observe(hostRef.current);
+
+    return () => {
+      disposed = true;
+      ro.disconnect();
+      if (pollTimer != null) window.clearTimeout(pollTimer);
+      unlistenData?.();
+      unlistenExit?.();
+      invoke("kill_session", { sessionId: sessionRef.current }).catch(() => {});
+      term.dispose();
+      termRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafId, sessionId]);
+
+  return (
+    <div
+      ref={hostRef}
+      className="shell-terminal-wrap"
+      style={{ flex: 1, overflow: "hidden" }}
+      onClick={() => termRef.current?.focus()}
+    />
   );
 }
 
@@ -3318,6 +3500,10 @@ function PaneView(props: PaneViewProps) {
                     leaf={leaf}
                     onCollapse={() => onLeafShellChange(leaf.id, { expanded: false })}
                     onResize={(ratio) => onLeafShellChange(leaf.id, { ratio })}
+                    theme={theme}
+                    fontFamily={fontFamily}
+                    fontSize={fontSize}
+                    onLeafShellChange={onLeafShellChange}
                   />
                 )}
                 <button
