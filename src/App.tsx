@@ -1397,7 +1397,7 @@ export default function App() {
     const rel = h > 0 ? `${h}h ${m}m` : totalMin >= 1 ? `${m}m` : "<1m";
     return { rel: `resets in ${rel}`, abs };
   };
-  const ctxResetText = formatResetTime(fiveHour?.resetsAt);
+  const ctxResetText = formatExpiryRelative(fiveHour?.resetsAt)?.rel.replace(/^resets /, "") ?? "";
 
   const computeTabDropIndex = (container: HTMLElement, clientX: number): number => {
     const tabEls = Array.from(container.querySelectorAll<HTMLElement>(".tabs > .tab"));
