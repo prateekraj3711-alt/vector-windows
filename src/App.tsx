@@ -1198,6 +1198,13 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl+` toggles companion shell on active pane
+      if (e.ctrlKey && e.key === "`" && !e.metaKey && !e.altKey && !e.isComposing) {
+        e.preventDefault();
+        const tab = tabs.find((t) => t.id === activeId);
+        if (tab) void toggleShell(tab.activePaneId);
+        return;
+      }
       // Ctrl+Tab / Ctrl+Shift+Tab cycle tabs
       if (e.ctrlKey && e.key === "Tab" && tabs.length > 1) {
         e.preventDefault();
@@ -3760,6 +3767,8 @@ function TerminalView({
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Let window-level handler own Ctrl+` for companion shell toggle.
+      if (e.key === "`" && e.ctrlKey && !e.metaKey && !e.altKey) return false;
       if (e.key === "Enter" && e.shiftKey) return false;
       // Let our document-capture handler own Cmd/Opt+Backspace.
       if (e.key === "Backspace" && (e.metaKey || e.altKey)) return false;
