@@ -38,8 +38,8 @@ not a shell prompt.
   - [Per-agent icons and chips](#per-agent-icons-and-chips)
 - [Shortcuts](#shortcuts)
 - [Claude Profiles (in depth)](#claude-profiles-in-depth)
-- [How it was built](#how-it-was-built)
-- [Try it](#try-it)
+- [Install on Windows](#install-on-windows)
+- [Install on macOS](#install-on-macos)
 - [Build from source](#build-from-source)
 - [Add a custom agent](#add-a-custom-agent)
 - [License](#license)
@@ -147,18 +147,6 @@ Vector solves this by mapping **folders → profiles**, where each profile is an
 - Each Claude tab shows a small pill with the active profile. Click it to override for just that tab (ephemeral) or jump to **Manage profiles**.
 
 Folders not mapped to any profile continue to use your existing `~/.claude/` — upgrading Vector never touches your default login.
-
-## How it was built
-
-**This is a vibe-coded app.** A human supplied the requirements in plain
-English, and the implementation — Rust backend, React/TypeScript frontend,
-Tauri packaging, icon generation, all of it — was produced by an AI coding
-agent following those requirements. No line of code here was hand-written by
-the human who scoped the project.
-
-If you're curious what "agentic software development" looks like end-to-end,
-this repository is one example: read the requirements, read the code, and
-judge for yourself.
 
 ## Install on Windows
 
