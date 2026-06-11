@@ -1,9 +1,18 @@
-# Vector
+# Vector (Windows port)
 
 An agent-first terminal. Every tab starts inside your favorite coding agent
 (Claude Code, Codex, Cursor Agent, GitHub Copilot CLI, Aider, Gemini, Amazon
 Q, OpenCode, Crush, Goose, Amp, Plandex, Continue, Qodo — or a raw shell),
 not a shell prompt.
+
+> **About this repository.** This is a Windows port of
+> [avram19/vector](https://github.com/avram19/vector), which is macOS
+> (Apple Silicon) only upstream. All original work and copyright belong to the
+> upstream author; this fork adds Windows platform support (PTY/ConPTY,
+> path handling, agent-binary resolution, file-manager/editor integration,
+> credential reading) and is redistributed under the same
+> [PolyForm Noncommercial License 1.0.0](./LICENSE). See
+> [`WINDOWS_PORT.md`](./WINDOWS_PORT.md) for the port scope and progress.
 
 <p align="center">
   <img src="src/logo.png" alt="Vector" width="96" />

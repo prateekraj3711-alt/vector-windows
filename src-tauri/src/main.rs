@@ -229,9 +229,9 @@ async fn start_shell_session(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let program = vec![shell.clone(), "-l".to_string()];
     let path = config::augmented_path();
+    // `mut` is only exercised on non-Windows (zsh trampoline pushes ZDOTDIR).
+    #[allow(unused_mut)]
     let mut env: Vec<(String, String)> = vec![
         ("TERM".into(), "xterm-256color".into()),
         ("COLORTERM".into(), "truecolor".into()),
@@ -240,19 +240,24 @@ async fn start_shell_session(
         ("PATH".into(), path.to_string_lossy().to_string()),
     ];
 
-    // ZDOTDIR trampoline: inject OSC 7 precmd silently for zsh only.
-    // For bash/fish we skip this for v0.3.3 — live cwd tracking won't update past initial.
-    if shell.ends_with("/zsh") || shell == "zsh" {
-        let zdotdir = std::env::temp_dir()
-            .join(format!("vector-zdotdir-{}", std::process::id()));
-        std::fs::create_dir_all(&zdotdir).map_err(|e| e.to_string())?;
+    // Shell selection + optional cwd-tracking trampoline. The trampoline emits
+    // OSC 7 on every prompt so the host can follow the shell's cwd.
+    #[cfg(not(windows))]
+    let program = {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        // ZDOTDIR trampoline: inject OSC 7 precmd silently for zsh only.
+        // For bash/fish we skip this — live cwd tracking won't update past initial.
+        if shell.ends_with("/zsh") || shell == "zsh" {
+            let zdotdir = std::env::temp_dir()
+                .join(format!("vector-zdotdir-{}", std::process::id()));
+            std::fs::create_dir_all(&zdotdir).map_err(|e| e.to_string())?;
 
-        // Capture the user's existing ZDOTDIR (or $HOME) so we can chain to their real .zshrc.
-        let user_zdotdir = std::env::var("ZDOTDIR")
-            .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().to_string_lossy().to_string());
+            // Capture the user's existing ZDOTDIR (or $HOME) so we can chain to their real .zshrc.
+            let user_zdotdir = std::env::var("ZDOTDIR")
+                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().to_string_lossy().to_string());
 
-        let zshrc_content = format!(
-            r#"# Vector shell trampoline — emit OSC 7 on every prompt so the host can track cwd.
+            let zshrc_content = format!(
+                r#"# Vector shell trampoline — emit OSC 7 on every prompt so the host can track cwd.
 _vector_osc7() {{ printf '\033]7;file://%s%s\007' "$HOST" "$PWD" }}
 typeset -ga precmd_functions
 precmd_functions+=(_vector_osc7)
@@ -260,13 +265,25 @@ _vector_osc7
 # Source the user's real .zshrc if present
 [ -f "{user_zdotdir}/.zshrc" ] && source "{user_zdotdir}/.zshrc"
 "#
-        );
-        let zshrc_path = zdotdir.join(".zshrc");
-        std::fs::write(&zshrc_path, &zshrc_content).map_err(|e| e.to_string())?;
+            );
+            let zshrc_path = zdotdir.join(".zshrc");
+            std::fs::write(&zshrc_path, &zshrc_content).map_err(|e| e.to_string())?;
 
-        env.push(("ZDOTDIR".into(), zdotdir.to_string_lossy().to_string()));
-        env.push(("VECTOR_USER_ZDOTDIR".into(), user_zdotdir));
-    }
+            env.push(("ZDOTDIR".into(), zdotdir.to_string_lossy().to_string()));
+            env.push(("VECTOR_USER_ZDOTDIR".into(), user_zdotdir));
+        }
+        vec![shell, "-l".to_string()]
+    };
+
+    // On Windows there is no $SHELL / ZDOTDIR. Prefer PowerShell 7 (`pwsh`) when
+    // installed, fall back to Windows PowerShell. `-NoLogo` keeps the banner out
+    // of the PTY. Live cwd tracking via a prompt-function trampoline is left to a
+    // later pass; the shell still starts in the spawn-time cwd.
+    #[cfg(windows)]
+    let program = {
+        let shell = if config::which("pwsh") { "pwsh.exe" } else { "powershell.exe" };
+        vec![shell.to_string(), "-NoLogo".to_string()]
+    };
 
     let cwd_path = cwd
         .map(std::path::PathBuf::from)
@@ -689,6 +706,8 @@ async fn open_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn read_agent_cwd(state: State<'_, AppState>, session_id: String) -> Option<String> {
+    // `pid` is only consumed by the macOS libproc path below.
+    #[allow(unused_variables)]
     let pid = state.registry.child_pid(&session_id)?;
     #[cfg(target_os = "macos")]
     {

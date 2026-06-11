@@ -240,6 +240,22 @@ impl PtyRegistry {
         })?;
 
         let (cmd_name, rest) = program.split_first().ok_or_else(|| anyhow::anyhow!("empty command"))?;
+        // On Windows, batch shims (`.cmd`/`.bat` — e.g. npm's `claude.cmd`) are
+        // not PE images and cannot be launched via CreateProcessW directly; they
+        // must run through `cmd.exe /c`. Native `.exe`s spawn as-is.
+        #[cfg(windows)]
+        let mut cmd = {
+            let lower = cmd_name.to_ascii_lowercase();
+            if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+                let mut c = CommandBuilder::new("cmd.exe");
+                c.arg("/c");
+                c.arg(cmd_name);
+                c
+            } else {
+                CommandBuilder::new(cmd_name)
+            }
+        };
+        #[cfg(not(windows))]
         let mut cmd = CommandBuilder::new(cmd_name);
         for a in rest { cmd.arg(a); }
         if let Some(cwd) = cwd { cmd.cwd(cwd); }

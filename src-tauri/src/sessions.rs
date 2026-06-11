@@ -133,7 +133,20 @@ pub struct SessionDetail {
 }
 
 fn encode_path_for_claude(p: &Path) -> String {
-    p.to_string_lossy().replace('/', "-")
+    // Claude Code names its per-project session dir by flattening the cwd:
+    // every path separator becomes '-'. On Windows the drive colon is also
+    // flattened, so `C:\Users\me\proj` → `C--Users-me-proj` (verified against
+    // a real `%USERPROFILE%\.claude\projects` tree). Replace all separators
+    // — '\\', '/', and ':' — so mixed-separator cwds still match.
+    #[cfg(windows)]
+    {
+        p.to_string_lossy()
+            .replace(['\\', '/', ':'], "-")
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_string_lossy().replace('/', "-")
+    }
 }
 
 /// Resolve the Claude session directory for `cwd`, optionally under a profile's

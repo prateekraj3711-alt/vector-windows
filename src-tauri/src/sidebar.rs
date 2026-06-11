@@ -37,7 +37,13 @@ pub struct EditorInfo {
 }
 
 // ─── Hardcoded editor list ────────────────────────────────────────────────────
+//
+// `EditorInfo.bundle_id` is the platform-specific launch key:
+//   - macOS:   a LaunchServices bundle id, opened via `open -b <id> <path>`.
+//   - Windows/Linux: the editor's CLI shim name (resolved on PATH), launched
+//     directly as `<shim> <path>`.
 
+#[cfg(target_os = "macos")]
 const EDITORS: &[(&str, &str)] = &[
     ("com.microsoft.VSCode", "Visual Studio Code"),
     ("com.todesktop.230313mzl4w4u92", "Cursor"),
@@ -47,6 +53,18 @@ const EDITORS: &[(&str, &str)] = &[
     ("com.jetbrains.WebStorm", "WebStorm"),
     ("com.jetbrains.pycharm", "PyCharm"),
     ("com.sublimetext.4", "Sublime Text"),
+];
+
+#[cfg(not(target_os = "macos"))]
+const EDITORS: &[(&str, &str)] = &[
+    ("code", "Visual Studio Code"),
+    ("cursor", "Cursor"),
+    ("windsurf", "Windsurf"),
+    ("zed", "Zed"),
+    ("idea", "IntelliJ IDEA"),
+    ("webstorm", "WebStorm"),
+    ("pycharm", "PyCharm"),
+    ("subl", "Sublime Text"),
 ];
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -237,40 +255,54 @@ pub async fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorI
         }
     }
 
-    // Slow path: probe each editor in parallel on a blocking worker. Eight
-    // sequential `mdfind` calls would otherwise stall the main thread for
-    // hundreds of ms on first sidebar mount.
+    // Slow path: probe each editor on a blocking worker so the first sidebar
+    // mount doesn't stall the main thread.
     let found = tauri::async_runtime::spawn_blocking(|| -> Vec<EditorInfo> {
-        let Some(mdfind) = config::which_path("mdfind") else {
-            return vec![];
-        };
-
-        let handles: Vec<_> = EDITORS
-            .iter()
-            .map(|&(bundle_id, display_name)| {
-                let mdfind = mdfind.clone();
-                std::thread::spawn(move || -> Option<EditorInfo> {
-                    let query = format!("kMDItemCFBundleIdentifier == '{}'", bundle_id);
-                    let out = Command::new(&mdfind).arg(&query).output().ok()?;
-                    if !out.status.success() {
-                        return None;
-                    }
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    if stdout.trim().is_empty() {
-                        return None;
-                    }
-                    Some(EditorInfo {
-                        bundle_id: bundle_id.to_string(),
-                        display_name: display_name.to_string(),
+        // macOS: eight `mdfind` LaunchServices lookups, run in parallel.
+        #[cfg(target_os = "macos")]
+        {
+            let Some(mdfind) = config::which_path("mdfind") else {
+                return vec![];
+            };
+            let handles: Vec<_> = EDITORS
+                .iter()
+                .map(|&(bundle_id, display_name)| {
+                    let mdfind = mdfind.clone();
+                    std::thread::spawn(move || -> Option<EditorInfo> {
+                        let query = format!("kMDItemCFBundleIdentifier == '{}'", bundle_id);
+                        let out = Command::new(&mdfind).arg(&query).output().ok()?;
+                        if !out.status.success() {
+                            return None;
+                        }
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        if stdout.trim().is_empty() {
+                            return None;
+                        }
+                        Some(EditorInfo {
+                            bundle_id: bundle_id.to_string(),
+                            display_name: display_name.to_string(),
+                        })
                     })
                 })
-            })
-            .collect();
-
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok().flatten())
-            .collect()
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok().flatten())
+                .collect()
+        }
+        // Windows / Linux: an editor is "installed" if its CLI shim is on PATH.
+        // `which_path` already resolves `.cmd`/`.exe`/`.bat` on Windows.
+        #[cfg(not(target_os = "macos"))]
+        {
+            EDITORS
+                .iter()
+                .filter(|&&(cmd, _)| config::which(cmd))
+                .map(|&(cmd, display_name)| EditorInfo {
+                    bundle_id: cmd.to_string(),
+                    display_name: display_name.to_string(),
+                })
+                .collect()
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -279,16 +311,31 @@ pub async fn installed_editors(state: State<'_, AppState>) -> Result<Vec<EditorI
     Ok(found)
 }
 
-/// Open a path in the given editor using macOS `open -b <bundle_id> <path>`.
-/// Fire-and-forget: we spawn `open` and don't wait for it (waiting blocks the
-/// Tauri command thread for seconds while LaunchServices brings the app forward).
+/// Open a path in the given editor. Fire-and-forget: we spawn and don't wait
+/// (waiting blocks the Tauri command thread for seconds while the app launches).
+///
+/// macOS: `open -b <bundle_id> <path>`.
+/// Windows/Linux: `bundle_id` is the editor's CLI shim — resolve it on PATH and
+/// launch `<shim> <path>` directly.
 #[tauri::command]
 pub fn open_in_editor(bundle_id: String, path: PathBuf) -> Result<(), String> {
-    let open_bin = config::which_path("open").ok_or_else(|| "open not found in PATH".to_string())?;
-    Command::new(open_bin)
-        .args(["-b", &bundle_id])
-        .arg(&path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let open_bin = config::which_path("open").ok_or_else(|| "open not found in PATH".to_string())?;
+        Command::new(open_bin)
+            .args(["-b", &bundle_id])
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let editor_bin = config::which_path(&bundle_id)
+            .ok_or_else(|| format!("editor '{bundle_id}' not found in PATH"))?;
+        Command::new(editor_bin)
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

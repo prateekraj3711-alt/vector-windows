@@ -196,15 +196,27 @@ pub fn which_path(bin: &str) -> Option<PathBuf> {
     }
     let path = augmented_path();
     for dir in std::env::split_paths(&path) {
-        let full = dir.join(bin);
-        if full.is_file() { return Some(full); }
+        // On Windows, prefer the executable-extension variants. An extensionless
+        // file is not runnable via CreateProcess — and npm ships a bare shell
+        // shim (`claude`) alongside `claude.cmd`, so matching the bare name first
+        // would hand back the unrunnable sh script. Skip the ext probe when `bin`
+        // already carries an executable extension.
         #[cfg(windows)]
         {
-            for ext in ["exe", "cmd", "bat"] {
-                let f = dir.join(format!("{bin}.{ext}"));
-                if f.is_file() { return Some(f); }
+            let has_exec_ext = std::path::Path::new(bin)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| matches!(e.to_ascii_lowercase().as_str(), "exe" | "cmd" | "bat" | "com"))
+                .unwrap_or(false);
+            if !has_exec_ext {
+                for ext in ["exe", "cmd", "bat"] {
+                    let f = dir.join(format!("{bin}.{ext}"));
+                    if f.is_file() { return Some(f); }
+                }
             }
         }
+        let full = dir.join(bin);
+        if full.is_file() { return Some(full); }
     }
     None
 }

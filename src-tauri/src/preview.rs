@@ -130,25 +130,59 @@ pub async fn read_file_raw(path: String) -> Result<tauri::ipc::Response, String>
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Reveal a path in the OS file manager, selecting the entry.
+/// macOS: `open -R`. Linux: `xdg-open` on the parent dir (no portable "select").
+/// Windows: `explorer /select,<path>`.
 #[tauri::command]
 pub fn reveal_in_finder(path: String) -> Result<(), String> {
     let p = expand_tilde(&path);
-    let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
-    Command::new(open_bin)
-        .arg("-R")
-        .arg(&p)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
+        Command::new(open_bin).arg("-R").arg(&p).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // explorer.exe returns nonzero even on success, so don't check status.
+        // /select, must be a single argument joined to the path with no space.
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", p.display()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let target = p.parent().unwrap_or(&p).to_path_buf();
+        Command::new("xdg-open").arg(&target).spawn().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
+/// Open a path with the OS default handler.
+/// macOS: `open`. Linux: `xdg-open`. Windows: `cmd /C start "" <path>`.
 #[tauri::command]
 pub fn open_default_app(path: String) -> Result<(), String> {
     let p = expand_tilde(&path);
-    let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
-    Command::new(open_bin)
-        .arg(&p)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let open_bin = crate::config::which_path("open").unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/open"));
+        Command::new(open_bin).arg(&p).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // The empty "" is start's title argument — required so a quoted path
+        // isn't consumed as the window title.
+        Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(&p)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(&p).spawn().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
