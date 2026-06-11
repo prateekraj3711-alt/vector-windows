@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Terminal, IDisposable, ILink } from "@xterm/xterm";
+import { hasPrimaryModifier } from "../platform";
 
 type Validation = { exists: boolean; absPath: string; isDir: boolean };
 const TTL_MS = 5_000;
@@ -228,7 +229,8 @@ export function registerPreviewLinkProvider(
           text: c.raw,
           activate: (event) => {
             const me = event as MouseEvent;
-            if (!me.metaKey) return;
+            // ⌘-click on macOS, Ctrl-click on Windows/Linux.
+            if (!hasPrimaryModifier(me)) return;
             openPreview(v.absPath, c.lineNo, c.colNo, { pin: !!me.shiftKey });
           },
           hover: () => {},

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { REVEAL_LABEL } from "../platform";
 
 export function BinaryPlaceholder({ filePath }: { filePath: string }) {
   return (
@@ -11,7 +12,7 @@ export function BinaryPlaceholder({ filePath }: { filePath: string }) {
         style={{ marginLeft: 8 }}
         onClick={() => invoke("reveal_in_finder", { path: filePath })}
       >
-        Reveal in Finder
+        {REVEAL_LABEL}
       </button>
     </div>
   );

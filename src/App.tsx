@@ -25,6 +25,7 @@ import { registerPreviewLinkProvider } from "./preview/linkProvider";
 import { Sidebar } from "./sidebar/Sidebar";
 import { makeCwdSniffer } from "./shell/cwdSniffer";
 import { makeAutocompleteAddon } from "./shell/autocompleteAddon";
+import { IS_WINDOWS, SC, REVEAL_LABEL } from "./platform";
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -1216,6 +1217,54 @@ export default function App() {
         setActiveId(tabs[nextIdx].id);
         return;
       }
+
+      // ── Windows shortcut scheme ──────────────────────────────────────────
+      // Bare Ctrl is left for the terminal; app actions use Ctrl+Shift, tab
+      // switching uses Alt+digit, pane focus uses Ctrl+Alt+Arrow.
+      if (IS_WINDOWS) {
+        // Alt+1..9 → switch tab.
+        if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+          const idx = parseInt(e.key, 10) - 1;
+          if (tabs[idx]) { e.preventDefault(); setActiveId(tabs[idx].id); }
+          return;
+        }
+        // Ctrl+Alt+Arrow → focus adjacent pane.
+        if (e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey &&
+            (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
+          e.preventDefault();
+          const tab = tabs.find((t) => t.id === activeId);
+          if (!tab) return;
+          const next = findAdjacentPane(tab.root, tab.activePaneId, e.key);
+          if (next) setActivePane(tab.id, next);
+          return;
+        }
+        // Everything else needs Ctrl (and not Meta). Bare Ctrl+key with no Shift
+        // falls through untouched so the agent still receives Ctrl+C/D/R/W/etc.
+        if (!e.ctrlKey || e.metaKey) return;
+        // Ctrl+, → settings.
+        if (e.key === "," && !e.shiftKey && !e.altKey) { e.preventDefault(); setSettingsOpen((o) => !o); return; }
+        // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 → font size (Shift allowed for "+").
+        if (!e.altKey && (e.key === "=" || e.key === "+")) { e.preventDefault(); setFontSize((s) => clamp(s + 1, 8, 40)); return; }
+        if (!e.altKey && (e.key === "-" || e.key === "_")) { e.preventDefault(); setFontSize((s) => clamp(s - 1, 8, 40)); return; }
+        if (!e.altKey && e.key === "0") { e.preventDefault(); setFontSize(13); return; }
+        // Ctrl+Shift+<letter> → app actions.
+        if (!e.shiftKey || e.altKey) return;
+        const k = e.key.toLowerCase();
+        if (k === "t") { e.preventDefault(); openPickerForNewTab(); return; }
+        if (k === "w") {
+          e.preventDefault();
+          const tab = tabs.find((t) => t.id === activeId);
+          if (tab) closePane(tab.id, tab.activePaneId);
+          return;
+        }
+        if (k === "d") { e.preventDefault(); splitActivePane("row"); return; }     // split right
+        if (k === "e") { e.preventDefault(); splitActivePane("column"); return; }  // split down
+        if (k === "r") { e.preventDefault(); reloadActive(); return; }
+        if (k === "k") { e.preventDefault(); setSwitcherOpen((o) => !o); return; }
+        return;
+      }
+
+      // ── macOS shortcut scheme ────────────────────────────────────────────
       if (!e.metaKey) return;
       if (e.key === "," && !e.shiftKey && !e.altKey && !e.ctrlKey) {
         e.preventDefault();
@@ -1475,7 +1524,7 @@ export default function App() {
               key={t.id}
               className={classes.join(" ")}
               onClick={() => setActiveId(t.id)}
-              title={`⌘${i + 1} · ${agentLabel} · ${tabCwd}`}
+              title={`${SC.tab(i + 1)} · ${agentLabel} · ${tabCwd}`}
               draggable={!isRenaming}
               onDragStart={(e) => {
                 dragFromRef.current = i;
@@ -1531,7 +1580,7 @@ export default function App() {
         <button
           className="tab-new"
           onClick={openPickerForNewTab}
-          title="New tab (⌘T)"
+          title={`New tab (${SC.newTab})`}
           onDragOver={(e) => {
             if (dndRef.current?.kind !== "pane") return;
             e.preventDefault();
@@ -1769,7 +1818,7 @@ export default function App() {
           ))}
           <option value="__shell__">shell</option>
         </select>
-        <button className="icon-btn" onClick={reloadActive} title="Reload agent (⌘⇧R)" disabled={!activeTab}>↻</button>
+        <button className="icon-btn" onClick={reloadActive} title={`Reload agent (${SC.reload})`} disabled={!activeTab}>↻</button>
         <div className="spacer" />
         {fiveHour && (
           <button
@@ -1842,7 +1891,7 @@ export default function App() {
               />
             </div>
           ))}
-          {!tabs.length && !picker.open && <div className="empty">No tabs. ⌘T to open one.</div>}
+          {!tabs.length && !picker.open && <div className="empty">No tabs. {SC.newTab} to open one.</div>}
         </div>
       </div>
       {picker.open && (
@@ -3820,6 +3869,11 @@ function TerminalView({
         // Opt+Backspace → kill word backwards (Ctrl+W).
         return send("\x17");
       }
+      if (IS_WINDOWS && e.key === "Backspace" && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        // Windows: Ctrl+Backspace → kill word backwards (Ctrl+W), matching the
+        // OS-wide delete-previous-word convention.
+        return send("\x17");
+      }
       // macOS line-editing shortcuts — translate to readline control chars
       // so Claude Code's input (and any bash-like prompt) obeys them.
       if (e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey) {
@@ -4037,7 +4091,7 @@ function TerminalContextMenu({ menu, onClose }: { menu: TermMenuData; onClose: (
     });
     if (menu.linkKind === "path") {
       items.push({
-        label: "Reveal in Finder",
+        label: REVEAL_LABEL,
         onClick: () => { invoke("reveal_in_finder", { path: menu.uri }).catch(() => {}); onClose(); },
       });
     }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FileIcon } from "./fileIcons";
 import { FileContextMenu, makeFileMenuItems } from "./contextMenu";
+import { hasPrimaryModifier } from "../platform";
 
 type DirEntry = { name: string; path: string; is_dir: boolean };
 
@@ -247,7 +248,8 @@ function FileTreeNode({
       return;
     }
     if (!onOpenPreview) return;
-    if (e.metaKey && e.shiftKey) {
+    // ⌘⇧-click on macOS, Ctrl+Shift-click on Windows/Linux → pin a second preview.
+    if (hasPrimaryModifier(e) && e.shiftKey) {
       onOpenPreview(entry.path, undefined, undefined, { pin: true });
     } else {
       onOpenPreview(entry.path, undefined, undefined, { pin: false });

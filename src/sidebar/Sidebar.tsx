@@ -2,6 +2,7 @@ import React, { useRef } from "react";
 import { useSidebarState, SidebarTab } from "./sidebarState";
 import { FileViewer } from "./FileViewer";
 import { WorktreesView } from "./WorktreesView";
+import { SC } from "../platform";
 
 const RAIL_WIDTH = 42;
 
@@ -106,7 +107,7 @@ export function Sidebar({
           <button
             className="sidebar-rail-icon"
             onClick={onOpenSettings}
-            title="Settings (⌘,)"
+            title={`Settings (${SC.settings})`}
             aria-label="Settings"
           ><SettingsIcon /></button>
         )}

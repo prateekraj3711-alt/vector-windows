@@ -48,7 +48,7 @@ not a shell prompt.
 
 ### Agent-native tabs
 
-`⌘T` opens a new tab already inside an agent, scoped to a project folder you pick.
+`Ctrl+Shift+T` (`⌘T` on macOS) opens a new tab already inside an agent, scoped to a project folder you pick.
 
 ### Claude Profiles
 
@@ -56,17 +56,17 @@ Map folders to separate Claude accounts (`CLAUDE_CONFIG_DIR` under the hood). Op
 
 ### Pane splits
 
-Split a tab into a grid of agent panes with `⌘D` / `⌘⇧D`, drag dividers to resize, drag panes between tabs. Each pane runs its own agent.
+Split a tab into a grid of agent panes with `Ctrl+Shift+D` / `Ctrl+Shift+E` (`⌘D` / `⌘⇧D` on macOS), drag dividers to resize, drag panes between tabs. Each pane runs its own agent.
 
 ### File Previewer
 
-⌘-click any file path printed by an agent to open a read-only preview in a side pane on the same tab. Supports Markdown (with embedded Mermaid diagrams), standalone Mermaid, syntax-highlighted code (js/ts/py/rs/rb and other common formats), PDF, and images. ⌘⇧-click pins a second preview for side-by-side compare. Right-click any path or preview pane for **Reveal in Finder**, **Open in default app**, or **Copy path**.
+`Ctrl`-click (`⌘`-click on macOS) any file path printed by an agent to open a read-only preview in a side pane on the same tab. Supports Markdown (with embedded Mermaid diagrams), standalone Mermaid, syntax-highlighted code (js/ts/py/rs/rb and other common formats), PDF, and images. `Ctrl+Shift`-click pins a second preview for side-by-side compare. Right-click any path or preview pane for **Reveal in File Explorer**, **Open in default app**, or **Copy path**.
 
 ### Sidebar — files & worktrees
 
 A collapsible sidebar with two tabs, both scoped to the focused tab's project:
 
-- **Files** — VSCode-style tree of the project root with hidden-files toggle. Click to open a preview, ⌘⇧-click to pin a second preview. Right-click for Reveal in Finder, Open in default app, Open in installed editor (VS Code / Cursor / Zed / Windsurf / WebStorm / IntelliJ / PyCharm / Sublime), or Copy path. Tree refreshes live as the agent writes files.
+- **Files** — VSCode-style tree of the project root with hidden-files toggle. Click to open a preview, `Ctrl+Shift`-click (`⌘⇧`-click on macOS) to pin a second preview. Right-click for Reveal in File Explorer, Open in default app, Open in installed editor (VS Code / Cursor / Zed / Windsurf / WebStorm / IntelliJ / PyCharm / Sublime), or Copy path. Tree refreshes live as the agent writes files.
 - **Worktrees** — every git repo discovered under the project, grouped by repo. Each worktree expands to show **Uncommitted** and **Committed (vs base)** changes. Click a change to open a unified diff with syntax highlighting in the preview pane. Toggle between flat and tree views from the search bar; both persist across restarts. Right-click a worktree for Reveal / Open / Open in editor.
 
 Sidebar width, active tab, collapsed state, hidden-files toggle, and worktrees view mode all persist via `~/.config/vector/ui.toml`.
@@ -113,20 +113,27 @@ Per-agent icons and chips in every tab.
 
 ## Shortcuts
 
-| Shortcut | Action |
-| --- | --- |
-| `⌘T` | New tab (opens project picker) |
-| `⌘W` | Close active pane |
-| `⌘D` / `⌘⇧D` | Split pane right / down |
-| `⌘⌥←` `⌘⌥→` `⌘⌥↑` `⌘⌥↓` | Focus adjacent pane |
-| `⌘⇧R` | Reload (restart) active agent |
-| `⌘1`…`⌘9` | Switch tab |
-| `⌃⇥` / `⌃⇧⇥` | Next / previous tab |
-| `⌘,` | Open Settings |
-| `⇧↵` | Multi-line input (Claude Code) |
-| `⌘←` / `⌘→` | Cursor to line start / end (while typing) |
-| `⌥←` / `⌥→` | Cursor back / forward one word |
-| `⌘⌫` / `⌥⌫` | Delete to line start / word start |
+On Windows, bare `Ctrl` is left for the terminal (so `Ctrl+C`, `Ctrl+D`,
+`Ctrl+R`, `Ctrl+W`, etc. reach your agent), so app actions use `Ctrl+Shift`,
+tab switching uses `Alt`, and pane focus uses `Ctrl+Alt`.
+
+| Action | Windows | macOS |
+| --- | --- | --- |
+| New tab (opens project picker) | `Ctrl+Shift+T` | `⌘T` |
+| Close active pane | `Ctrl+Shift+W` | `⌘W` |
+| Split pane right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E` | `⌘D` / `⌘⇧D` |
+| Focus adjacent pane | `Ctrl+Alt+←/→/↑/↓` | `⌘⌥←/→/↑/↓` |
+| Reload (restart) active agent | `Ctrl+Shift+R` | `⌘⇧R` |
+| Switch tab | `Alt+1`…`Alt+9` | `⌘1`…`⌘9` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `⌃⇥` / `⌃⇧⇥` |
+| Toggle companion shell (active pane) | `Ctrl+\`` | `⌃\`` |
+| Command switcher | `Ctrl+Shift+K` | `⌘K` |
+| Open Settings | `Ctrl+,` | `⌘,` |
+| Font size up / down / reset | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | `⌘=` / `⌘-` / `⌘0` |
+| Multi-line input (Claude Code) | `Shift+Enter` | `⇧↵` |
+| Cursor to line start / end (while typing) | `Home` / `End` | `⌘←` / `⌘→` |
+| Cursor back / forward one word | `Alt+←` / `Alt+→` | `⌥←` / `⌥→` |
+| Delete previous word | `Ctrl+Backspace` | `⌥⌫` |
 
 ## Claude Profiles (in depth)
 
@@ -134,7 +141,7 @@ If you juggle two Claude accounts — say personal and work — the usual flow i
 
 Vector solves this by mapping **folders → profiles**, where each profile is an isolated Claude home (`~/.claude-profiles/<id>/`) injected via `CLAUDE_CONFIG_DIR` when a Claude session starts in a matched folder.
 
-- **Open Settings** (`⌘,`) → **Claude Profiles** → **Add profile**.
+- **Open Settings** (`Ctrl+,`, or `⌘,` on macOS) → **Claude Profiles** → **Add profile**.
 - Pick a name, the folders that should use it, and (under **Advanced**) a **Seed from** source — defaults to `~/.claude`, or point it at `~/.claude-work` / any existing Claude home. Credentials, `settings.json`, and `projects/` history are copied over so the new profile starts with your real state instead of a blank install.
 - macOS stores Claude credentials in Keychain by default; seeding copies everything else but the new profile will still prompt `/login` once — after that it sticks.
 - Each Claude tab shows a small pill with the active profile. Click it to override for just that tab (ephemeral) or jump to **Manage profiles**.
@@ -175,11 +182,9 @@ Vector auto-detects any AI CLIs already on your `PATH` (Claude Code, Codex,
 Gemini, …). Install at least one — e.g. Claude Code via `npm i -g
 @anthropic-ai/claude-code` — and it appears in the new-tab agent list.
 
-> **Note on keyboard shortcuts (Windows):** the in-app `⌘`-based shortcuts are
-> being remapped for Windows (tracked in `WINDOWS_PORT.md`). For now, use the
-> on-screen controls (the **+** button for a new tab, the topbar dropdowns,
-> right-click context menus). Core terminal keys (Ctrl+C, etc.) pass straight
-> through to your agent.
+See [**Shortcuts**](#shortcuts) for the Windows key bindings. Bare terminal
+keys (`Ctrl+C`, `Ctrl+D`, `Ctrl+R`, …) pass straight through to your agent;
+app actions use `Ctrl+Shift`, tab switching uses `Alt`.
 
 ## Install on macOS
 

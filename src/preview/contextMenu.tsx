@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { REVEAL_LABEL } from "../platform";
 
 export type MenuTarget = { absPath: string };
 
@@ -68,7 +69,7 @@ export function PathContextMenu({
         padding: "4px 0",
       }}
     >
-      {item("Reveal in Finder", () => {
+      {item(REVEAL_LABEL, () => {
         invoke("reveal_in_finder", { path: target.absPath }).catch(() => {});
       })}
       {item("Open in default app", () => {
