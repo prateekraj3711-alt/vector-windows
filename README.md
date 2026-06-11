@@ -153,42 +153,93 @@ If you're curious what "agentic software development" looks like end-to-end,
 this repository is one example: read the requirements, read the code, and
 judge for yourself.
 
-## Try it
+## Install on Windows
 
-Download the latest `.dmg` from the [Releases](https://github.com/avram19/vector/releases)
-page, drag Vector into `/Applications`, and open it.
+**Requirements:** Windows 10/11 (x64). The
+[Microsoft Edge WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+is required — it ships with current Windows 11 and is auto-installed by the
+setup if missing.
 
-Because the build is unsigned, macOS Gatekeeper will block it the first time.
-To bypass once:
+1. Go to the [**Releases**](https://github.com/prateekraj3711-alt/vector-windows/releases)
+   page and download one of:
+   - `Vector_<version>_x64-setup.exe` — **NSIS installer** (recommended; per-user, no admin needed)
+   - `Vector_<version>_x64_en-US.msi` — **MSI installer** (for managed/Group-Policy deploys)
+2. Run the installer.
+3. **SmartScreen warning:** because the build is not yet code-signed, Windows
+   SmartScreen will show *"Windows protected your PC."* Click **More info →
+   Run anyway** to proceed. (This goes away once the app is signed with an
+   OV/EV certificate.)
+4. Launch **Vector** from the Start menu.
 
-```
-# Option A — right-click Open
-Right-click Vector.app → Open → Open
+Vector auto-detects any AI CLIs already on your `PATH` (Claude Code, Codex,
+Gemini, …). Install at least one — e.g. Claude Code via `npm i -g
+@anthropic-ai/claude-code` — and it appears in the new-tab agent list.
 
-# Option B — remove the quarantine attribute
-xattr -dr com.apple.quarantine /Applications/Vector.app
-```
+> **Note on keyboard shortcuts (Windows):** the in-app `⌘`-based shortcuts are
+> being remapped for Windows (tracked in `WINDOWS_PORT.md`). For now, use the
+> on-screen controls (the **+** button for a new tab, the topbar dropdowns,
+> right-click context menus). Core terminal keys (Ctrl+C, etc.) pass straight
+> through to your agent.
 
-After the first launch, you can open it normally from Launchpad or
-Spotlight.
+## Install on macOS
 
-On first launch Vector will ask for Notification permission (so agents can
-alert you when they need input) — grant it in System Settings if you dismiss
-the prompt.
+Download the latest `.dmg` from the
+[upstream Releases](https://github.com/avram19/vector/releases) page, drag
+Vector into `/Applications`, and open it. Because the build is unsigned,
+Gatekeeper blocks it the first time — bypass with **right-click → Open → Open**,
+or `xattr -dr com.apple.quarantine /Applications/Vector.app`.
 
 ## Build from source
 
-Requirements: Rust (stable), Node 20+, macOS / Linux / Windows.
+**Requirements:**
+
+- **Rust** (stable, MSVC host on Windows) — <https://rustup.rs>
+- **Node 20+**
+- **Windows:** Visual Studio 2022 **C++ build tools** (the
+  *Desktop development with C++* workload) + a Windows 10/11 SDK, and the
+  WebView2 runtime.
+- **macOS:** Xcode command-line tools. **Linux:** the usual `webkit2gtk`/`gtk` dev packages.
 
 ```bash
 npm install
-npm run tauri dev       # dev build with HMR
-npm run tauri build     # produce .app + .dmg in src-tauri/target/release/bundle/
+npm run tauri dev       # dev build with hot reload
+npm run tauri build     # release build + installers
 ```
+
+On Windows, `npm run tauri build` produces, under
+`src-tauri/target/release/bundle/`:
+
+- `nsis/Vector_<version>_x64-setup.exe`
+- `msi/Vector_<version>_x64_en-US.msi`
+
+To produce signed updater artifacts locally, set the signing env vars before
+building (CI sets these from repo secrets automatically):
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.vector-windows-updater.key" -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<your key password>"
+npm run tauri build
+```
+
+## Releasing (automated)
+
+Pushing a version tag builds and publishes the Windows installers
+automatically via [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml):
+
+```bash
+git tag v0.3.4-win.1
+git push origin v0.3.4-win.1   # → GitHub Actions builds + signs + creates the Release
+```
+
+The workflow can also be run manually from the **Actions** tab (provide a tag).
+It signs the updater bundle with the repo secrets `TAURI_SIGNING_PRIVATE_KEY`
+and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and uploads the NSIS/MSI installers
+plus `latest.json` (consumed by the in-app auto-updater).
 
 ## Add a custom agent
 
-Drop a TOML file at `~/.config/vector/config.toml`:
+Drop a TOML file at `%APPDATA%\vector\config.toml` (Windows) or
+`~/.config/vector/config.toml` (macOS/Linux):
 
 ```toml
 default = "claude"

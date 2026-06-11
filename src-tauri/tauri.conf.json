@@ -29,9 +29,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM4NjIyNkUyQUIyMUQyNzUKUldSMTBpR3I0aVppT0VQZzEwcHQvUitCSlhzUUVJZ3pBVUJhTU1HV1VlR096Y0hGYXlPdTIxRmsK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2NDBEREFBMjYwNjM3NDIKUldSQ053WW1xdDFBdG10SStteW85TkpNZkh1cS9ZUXBNYzRraVZhSjZYc0VDVk1hTlR0dmpRbXEK",
       "endpoints": [
-        "https://github.com/avram19/vector/releases/latest/download/latest.json"
+        "https://github.com/prateekraj3711-alt/vector-windows/releases/latest/download/latest.json"
       ]
     }
   },

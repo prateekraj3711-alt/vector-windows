@@ -1,0 +1,68 @@
+name: Release (Windows)
+
+# Builds the Windows installers (NSIS .exe + MSI), signs the updater bundle,
+# and publishes them to a GitHub Release. Triggered by pushing a version tag
+# (e.g. `v0.3.4-win.1`) or run manually with a tag input.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. v0.3.4-win.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build, sign & publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing — keypair generated for this repo.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # On a tag push this is the pushed tag; on manual dispatch it's the input.
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "Vector (Windows) ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseBody: |
+            Windows build of Vector (agent-first terminal).
+
+            **Install:** download `Vector_*_x64-setup.exe` (NSIS) or `Vector_*_x64_en-US.msi`,
+            run it, and dismiss the SmartScreen prompt with **More info → Run anyway**
+            (the build is not code-signed yet). See the README for details.
+
+            Windows port notes: `WINDOWS_PORT.md`.
+          releaseDraft: false
+          prerelease: false
+          # Default targets ("all") produce both NSIS and MSI on Windows, plus
+          # the signed updater artifacts + latest.json.
+          args: ""
