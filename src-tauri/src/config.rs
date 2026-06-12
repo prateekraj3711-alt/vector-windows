@@ -225,6 +225,24 @@ pub fn which(bin: &str) -> bool {
     which_path(bin).is_some()
 }
 
+/// Build a `std::process::Command` that does NOT flash a console window on
+/// Windows. A GUI-subsystem app (Vector) spawning a console program — `git`,
+/// `cmd`, `explorer` — pops a visible console window per call unless
+/// `CREATE_NO_WINDOW` is set. Worktree discovery alone fires many `git`
+/// invocations on startup (× every auto-resumed tab), so without this the
+/// window flickers with console pop-ups for a few seconds. No-op off Windows.
+pub fn silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Whether an agent caches terminal colors at startup and needs a process
 /// restart to pick up a Vector theme change. The frontend shows a banner
 /// offering a one-click restart for these agents.

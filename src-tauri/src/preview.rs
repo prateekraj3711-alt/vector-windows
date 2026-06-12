@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::process::Command;
 
 #[derive(Serialize)]
@@ -146,7 +147,7 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
     {
         // explorer.exe returns nonzero even on success, so don't check status.
         // /select, must be a single argument joined to the path with no space.
-        Command::new("explorer.exe")
+        crate::config::silent_command("explorer.exe")
             .arg(format!("/select,{}", p.display()))
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -174,7 +175,7 @@ pub fn open_default_app(path: String) -> Result<(), String> {
     {
         // The empty "" is start's title argument — required so a quoted path
         // isn't consumed as the window title.
-        Command::new("cmd")
+        crate::config::silent_command("cmd")
             .args(["/C", "start", ""])
             .arg(&p)
             .spawn()
