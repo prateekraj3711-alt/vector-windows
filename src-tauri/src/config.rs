@@ -359,3 +359,50 @@ pub fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(id: &str, folders: &[&str]) -> ClaudeProfile {
+        ClaudeProfile {
+            id: id.into(),
+            name: id.into(),
+            color: "#fff".into(),
+            folders: folders.iter().map(|s| s.to_string()).collect(),
+            created_ms: 0,
+        }
+    }
+
+    #[test]
+    fn slugify_lowercases_and_dashes() {
+        assert_eq!(slugify_profile_id("Work Account", &[]), "work-account");
+        assert_eq!(slugify_profile_id("a/b c", &[]), "a-b-c");
+    }
+
+    #[test]
+    fn slugify_disambiguates_collisions() {
+        let existing = vec!["work".to_string()];
+        assert_eq!(slugify_profile_id("Work", &existing), "work-2");
+    }
+
+    #[test]
+    fn resolve_profile_picks_deepest_folder() {
+        let pf = ProfilesFile {
+            profiles: vec![profile("a", &["/home/me"]), profile("b", &["/home/me/work"])],
+        };
+        let got = resolve_profile_for_path(&pf, Path::new("/home/me/work/proj"));
+        assert_eq!(got.map(|p| p.id.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn resolve_profile_none_when_unmatched() {
+        let pf = ProfilesFile { profiles: vec![profile("a", &["/home/me"])] };
+        assert!(resolve_profile_for_path(&pf, Path::new("/var/tmp")).is_none());
+    }
+
+    #[test]
+    fn expand_tilde_passthrough_for_absolute() {
+        assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
+    }
+}
