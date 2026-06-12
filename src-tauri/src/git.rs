@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,7 +36,7 @@ fn git_bin() -> Result<PathBuf, String> {
 
 fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
     let git = git_bin()?;
-    let out = Command::new(&git)
+    let out = crate::config::silent_command(&git)
         .args(args)
         .current_dir(cwd)
         .output()
@@ -57,7 +56,7 @@ fn run_git(args: &[&str], cwd: &Path) -> Result<String, String> {
 /// `git diff --no-index` exits 1 when files differ, with the diff on stdout.
 fn run_git_capture_stdout(args: &[&str], cwd: &Path) -> Result<String, String> {
     let git = git_bin()?;
-    let out = Command::new(&git)
+    let out = crate::config::silent_command(&git)
         .args(args)
         .current_dir(cwd)
         .output()

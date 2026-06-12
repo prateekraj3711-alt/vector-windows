@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use serde::Serialize;
 use tauri::State;
@@ -332,7 +333,7 @@ pub fn open_in_editor(bundle_id: String, path: PathBuf) -> Result<(), String> {
     {
         let editor_bin = config::which_path(&bundle_id)
             .ok_or_else(|| format!("editor '{bundle_id}' not found in PATH"))?;
-        Command::new(editor_bin)
+        config::silent_command(editor_bin)
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;

@@ -698,7 +698,7 @@ async fn open_path(path: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let spawn = std::process::Command::new("xdg-open").arg(&target).spawn();
     #[cfg(target_os = "windows")]
-    let spawn = std::process::Command::new("cmd").args(["/C", "start", "", &target]).spawn();
+    let spawn = config::silent_command("cmd").args(["/C", "start", "", &target]).spawn();
 
     spawn.map(|_| ()).map_err(|e| e.to_string())
 }
