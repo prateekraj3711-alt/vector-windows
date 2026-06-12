@@ -18,6 +18,7 @@ import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import logoUrl from "./logo.png";
 import { PreviewPane, PreviewPaneHandle } from "./preview/PreviewPane";
@@ -26,6 +27,20 @@ import { Sidebar } from "./sidebar/Sidebar";
 import { makeCwdSniffer } from "./shell/cwdSniffer";
 import { makeAutocompleteAddon } from "./shell/autocompleteAddon";
 import { IS_WINDOWS, SC, REVEAL_LABEL } from "./platform";
+
+// On Windows (WebView2 / Chromium) the WebGL renderer is fast and crisp, so we
+// opt into it there. On macOS WKWebView it rendered worse than the DOM renderer,
+// so that platform stays on DOM. Best-effort: if WebGL init fails or its GPU
+// context is lost, dispose and silently fall back to the DOM renderer. Must be
+// called AFTER term.open() (the addon needs the attached element).
+function tryLoadWebglRenderer(term: Terminal) {
+  if (!IS_WINDOWS) return;
+  try {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() => { try { addon.dispose(); } catch { /* noop */ } });
+    term.loadAddon(addon);
+  } catch { /* keep the DOM renderer */ }
+}
 
 // Compare two `X.Y.Z` version strings. Returns negative if a<b, 0 if equal, positive if a>b.
 // Non-numeric chunks (pre-release tags like `-beta.1`) are ignored — we only ship stable releases.
@@ -3086,6 +3101,7 @@ function ShellTerminalView({
     // Swallow OSC 777 notifications — not relevant for the shell panel.
     term.parser.registerOscHandler(777, () => true);
     term.open(hostRef.current);
+    tryLoadWebglRenderer(term);
     termRef.current = term;
     fitRef.current = fit;
 
@@ -3782,6 +3798,7 @@ function TerminalView({
     // so consume and drop.
     term.parser.registerOscHandler(777, () => true);
     term.open(wrapRef.current);
+    tryLoadWebglRenderer(term);
     termRef.current = term;
     fitRef.current = fit;
     // BEL (\x07) is too noisy as an attention signal — Claude emits it for
