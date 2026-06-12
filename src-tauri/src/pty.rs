@@ -404,3 +404,59 @@ impl PtyRegistry {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_osc_777_and_counts_notify() {
+        let mut carry = Vec::new();
+        let input = b"hello\x1b]777;warp://cli-agent;{\"sessionId\":\"abc12345\"}\x07world";
+        let r = filter_pty_output(&mut carry, input, false);
+        assert_eq!(r.bytes, b"helloworld");
+        assert_eq!(r.notify_count, 1);
+        assert_eq!(r.osc_777_payloads.len(), 1);
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn passes_through_normal_csi() {
+        let mut carry = Vec::new();
+        let input = b"\x1b[31mred\x1b[0m";
+        let r = filter_pty_output(&mut carry, input, false);
+        assert_eq!(r.bytes, input);
+    }
+
+    #[test]
+    fn sync_markers_stripped_only_in_aggressive_mode() {
+        let input = b"\x1b[?2026hX\x1b[?2026l";
+        let mut c1 = Vec::new();
+        assert_eq!(filter_pty_output(&mut c1, input, true).bytes, b"X");
+        let mut c2 = Vec::new();
+        assert_eq!(filter_pty_output(&mut c2, input, false).bytes, input);
+    }
+
+    #[test]
+    fn reassembles_escape_split_across_chunks() {
+        let mut carry = Vec::new();
+        let r1 = filter_pty_output(&mut carry, b"abc\x1b", false);
+        assert_eq!(r1.bytes, b"abc"); // ESC held in carry
+        let r2 = filter_pty_output(&mut carry, b"[31mX", false);
+        assert_eq!(r2.bytes, b"\x1b[31mX");
+    }
+
+    #[test]
+    fn extracts_uuid_session_id() {
+        let payload = "warp://cli-agent;{\"sessionId\":\"550e8400-e29b-41d4-a716-446655440000\"}";
+        assert_eq!(
+            extract_session_id(payload).as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+    }
+
+    #[test]
+    fn rejects_too_short_session_id() {
+        assert_eq!(extract_session_id("{\"sessionId\":\"x\"}"), None);
+    }
+}

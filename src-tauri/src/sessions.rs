@@ -379,3 +379,41 @@ pub fn get_claude_session(cwd: &Path, session_id: &str, config_dir: Option<&Path
         else { first_user_title };
     Some(SessionDetail { id: session_id.into(), agent_id: "claude".into(), title, modified_ms, messages })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn encode_path_flattens_separators() {
+        #[cfg(windows)]
+        {
+            // Drive colon and backslashes both collapse to '-'.
+            assert_eq!(encode_path_for_claude(Path::new(r"C:\Users\me\proj")), "C--Users-me-proj");
+            assert_eq!(encode_path_for_claude(Path::new(r"C:\a")), "C--a");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(encode_path_for_claude(Path::new("/Users/me/proj")), "-Users-me-proj");
+        }
+    }
+
+    #[test]
+    fn strip_recap_prefix_returns_summary_body() {
+        let text = "This session is being continued from a previous conversation.\n\nSummary:\nDid the thing.";
+        assert_eq!(strip_recap_prefix(text), "Did the thing.");
+    }
+
+    #[test]
+    fn strip_recap_prefix_passes_through_normal_text() {
+        assert_eq!(strip_recap_prefix("just a normal message"), "just a normal message");
+    }
+
+    #[test]
+    fn classify_system_tags() {
+        assert_eq!(classify_system("<system-reminder>x"), Some("system reminder"));
+        assert_eq!(classify_system("<bash-input>ls"), Some("bash input"));
+        assert_eq!(classify_system("hello there"), None);
+    }
+}
